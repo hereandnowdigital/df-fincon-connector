@@ -174,7 +174,6 @@ Orders include stock location information:
 - **Manual Customer Import**: On-demand customer sync interface
 - **Cron Log**: View scheduled task execution history
 - **Stock Locations**: Manage warehouse configurations
-- **Invoice Management**: View and download Fincon invoices
 
 ### Manual Import Pages
 **Product Import:**

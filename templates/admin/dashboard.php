@@ -53,13 +53,6 @@
           </a>
         </div>
         
-        <div class="df-fincon-card">
-          <h3><?php esc_html_e( 'Invoice Management', 'df-fincon' ); ?></h3>
-          <p><?php esc_html_e( 'View and manage Fincon invoices', 'df-fincon' ); ?></p>
-          <a href="<?php echo esc_url( admin_url( 'admin.php?page=df-fincon-invoice-management' ) ); ?>" class="button button-primary">
-            <?php esc_html_e( 'Manage Invoices', 'df-fincon' ); ?>
-          </a>
-        </div>
       </div>
     </div>
     

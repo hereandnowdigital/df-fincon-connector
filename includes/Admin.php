@@ -139,15 +139,6 @@ class Admin {
       [ __CLASS__,'render_stock_locations_page' ]
     );
 
-    add_submenu_page(
-      'df-fincon-settings',
-      __( 'Invoice Management', 'df-fincon' ),
-      __( 'Invoice Management', 'df-fincon' ),
-      'manage_woocommerce',
-      'df-fincon-invoice-management',
-      [ __CLASS__,'render_invoice_management_page' ]
-    );
-
   }
 
   public static function register_settings_api(): void {
