@@ -1,3 +1,10 @@
 .vscode/
 .DS_Store
 Thumbs.db
+.roo/
+AGENTS.md
+.clinerules
+_documentation/API Examples/
+_logs/
+plans/
+_ai_generated/

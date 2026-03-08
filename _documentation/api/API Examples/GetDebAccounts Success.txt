@@ -1,0 +1,91 @@
+Documentation:
+GetDebAccounts (ConnectID, MinAccNo, MaxAccNo: String;   RecNo, Count: Integer) 
+GET: http(s)://hostname:port/datasnap/rest/FinconAPI/”GetDebAccounts”/ConnectID/MinAccNo 
+  /MaxAccNo/RecNo/Count/
+
+Example:
+GET: {{base_url}}"GetDebAccounts"/{{ConnectID}}/TES001/TES001/0/1/
+
+Success Response:
+{
+    "result": [
+        {
+            "Count": 1,
+            "RecNo": 1080,
+            "ErrorInfo": "",
+            "Accounts": [
+                {
+                    "AccNo": "TES001",
+                    "DebName": "TEST",
+                    "Addr1": "UNIT 12 & 13  RIVERGATE PARK 2",
+                    "Addr2": "35 COLUMBUS CRESCENT PARKLANDS",
+                    "Addr3": "CAPE TOWN",
+                    "PCode": "7441",
+                    "DelName": "TEST",
+                    "DelAddr1": "UNIT 12 & 13  RIVERGATE PARK 2",
+                    "DelAddr2": "35 COLUMBUS CRESCENT PARKLANDS",
+                    "DelAddr3": "CAPE TOWN",
+                    "DelAddr4": "WESTERN CAPE",
+                    "DelPCode": "7441",
+                    "DelInstruc1": "",
+                    "DelInstruc2": "",
+                    "DelInstruc3": "",
+                    "DelInstruc4": "",
+                    "DelInstruc5": "",
+                    "DelInstruc6": "",
+                    "RegName": "",
+                    "TelNo": "021 000 2233",
+                    "TelNo1": "021 552 6701",
+                    "FaxNo": "",
+                    "Contact": "JASON MAXWELL",
+                    "Contact1": "SIMON TORRANCE",
+                    "TaxNo": "",
+                    "CompanyNo": "",
+                    "Memo": "D00824",
+                    "ParentAccNo": "",
+                    "Notes": "",
+                    "AreaCode": "30",
+                    "RepCode": "",
+                    "TermCode": "C",
+                    "Email": "simon@dbg.co.za",
+                    "Email1": "spjt07@gmail.com",
+                    "Active": "Y",
+                    "CreditGuarantee": "N",
+                    "CategoryCode": "",
+                    "ZeroTax": "N",
+                    "CurrencyCode": "00",
+                    "DeliveryMethod": "C",
+                    "FinRef": "",
+                    "AccRef": "",
+                    "CreditCover": 0.0,
+                    "CreditLimit": 0.0,
+                    "BankName": "",
+                    "BankAccNo": "",
+                    "Branch": "",
+                    "StatementMail": "jurgen@dbg.co.za;jurgenhenke@gmail.com",
+                    "StatementPrint": "N",
+                    "AccManager": "050",
+                    "InternalRep": "071",
+                    "Discount": 0.0,
+                    "PriceStruc": 1,
+                    "CurrentBalance": 0.0,
+                    "SecurityLevel": "0",
+                    "AutoReval": "N",
+                    "DetailChange": "N",
+                    "BackOrders": "Y",
+                    "WebList": "Y",
+                    "OnHold": "N",
+                    "Rebate": 0.0,
+                    "Location": "",
+                    "SettlementDisc": 0.0,
+                    "TargetGP": 0.0,
+                    "Password": "",
+                    "PriceList": "Y",
+                    "PriceListExpDate": "        ",
+                    "ChangeDate": "20250220",
+                    "ChangeTime": "15:52:07"
+                }
+            ]
+        }
+    ]
+}

@@ -9,7 +9,6 @@
  */
 
 namespace DF_FINCON;
-
 // Exit if accessed directly.
 if ( ! defined( 'ABSPATH' ) )
   exit;
@@ -51,14 +50,22 @@ class Plugin {
   }
 
   private function load_dependencies(): void {
+
     if ( class_exists( 'WooCommerce' ) ) :
       Logger::create( );
-      Woo::create( );
+      Shortcodes::create();
+      Woo::create();
+      InvoiceChecker::create();
     endif;
     
-    if ( is_admin() ) 
+    Cron::create();
+    
+    if ( is_admin() ) :
       Admin::create( );
-
+      if ( class_exists( 'WooCommerce' ) )
+        Woo_Admin::create( );
+    endif;
   }
 
 }
+

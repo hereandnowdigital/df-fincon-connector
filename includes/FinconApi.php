@@ -44,6 +44,14 @@ class FinconApi {
    */
   private const CONNECT_ID_TTL = 300; 
 
+  public mixed $error = null;
+
+  public int $batch_size = 100;
+  public int $current_result_count = 0;
+  public int $total_result_count = 0;
+  public string $request_next_record = '0';
+
+  public string $response_next_record = '0';
 
 
   /**
@@ -86,7 +94,7 @@ class FinconApi {
    * Fincon API instance base URL
    * Format http://<host>:<port><base_path>
    * 
-   * Built from configuration options saved in WP Admin Dashboard in the Fincon Connector > API settings
+   * Built from configuration options saved in WP Admin Dashboard in the Fincon Connector > API Connection
    * 
    * @var string
    */
@@ -115,8 +123,18 @@ class FinconApi {
     return wp_parse_args( $config_override, $options );
   }
 
-  public static function get_options( ) {
-    return get_option( self::OPTIONS_NAME, [] );
+  public static function get_options( ): array {
+    $options = get_option( self::OPTIONS_NAME, [] );
+
+    if ( ! is_array( $options ) ) 
+      $options = [];
+    
+    return $options;
+  }
+
+  public static function get_option( string $option_key ): mixed {
+    $options = get_option( self::OPTIONS_NAME, [] );
+    return $options[$option_key] ?? null;
   }
 
   private static function build_base_url(): string {
@@ -131,8 +149,8 @@ class FinconApi {
    *
    * @return string The ConnectID or an empty string if expired or not set.
    */
-  public static function get_connect_id(): string | WP_Error  {
-    return (string) (self::$connect_id ?? self::create_connect_id() );
+  public function get_connect_id(): string | WP_Error  {
+    return (string) (self::$connect_id ?? $this->create_connect_id() );
   }
 
 
@@ -140,8 +158,8 @@ class FinconApi {
    * Creates a new Fincon session via a login request and save the returned ConnectID as a transient
    * @return string | WP_Error The ConnectID 
    */
-  public static function create_connect_id(): string | WP_Error {
-    $login_result = self::login( true );
+  public function create_connect_id(): string | WP_Error {
+    $login_result = $this->login( true );
     if ( is_wp_error( $login_result ) ) :
       $error = $login_result;
       Logger::error( sprintf( 'Connect ID creation failed: %s', $login_result->get_error_message() ) );
@@ -158,7 +176,7 @@ class FinconApi {
    * 
    * @param string $connect_id
    */
-  public static function set_connect_id( string $connect_id = '' ) {
+  public static function set_connect_id( string $connect_id = '' ): void {
     if ( empty( $connect_id ) ):
       self::clear_connect_id();
     else:
@@ -174,7 +192,7 @@ class FinconApi {
    * 
    * @param string $connect_id
    */
-  public static function clear_connect_id( ) {
+  public static function clear_connect_id( ): void {
     self::$connect_id = null;
     delete_transient( self::CONNECTID_TRANSIENT_KEY );
   }
@@ -195,8 +213,8 @@ class FinconApi {
    * @param array $parameters
    * @return void
    */
-  private static function get_request( string $function, array $parameters = [], $skip_connect_id = false ): array|\WP_Error {
-    return self::send_request( 'GET', $function, $parameters, [], $skip_connect_id );
+  private function get_request( string $function, array $parameters = [], bool $skip_connect_id = false ): array|\WP_Error {
+    return $this->send_request( 'GET', $function, $parameters, [], $skip_connect_id );
   }
 
   /**
@@ -206,8 +224,8 @@ class FinconApi {
    * @param array $parameters
    * @return void
    */
-  private static function post_request( string $function, array $query_params = [], array $body_params = [ ], $skip_connect_id = false ): array|\WP_Error {
-    return self::send_request( 'POST', $function, $query_params, $body_params, $skip_connect_id );
+  private function post_request( string $function, array $query_params = [], array $body_params = [ ], bool $skip_connect_id = false ): array|\WP_Error {
+    return $this->send_request( 'POST', $function, $query_params, $body_params, $skip_connect_id );
   }
 
   /**
@@ -220,16 +238,16 @@ class FinconApi {
    * 
    * @return array|\WP_Error The Fincon API result array or a WP_Error object.
    */
-  private static function send_request( string $method, string $function_name, array $query_params = [],  array $request_body = [], $skip_connect_id = false): array|\WP_Error {
+  private function send_request( string $method, string $function_name, array $query_params = [],  array $request_body = [], $skip_connect_id = false): array|\WP_Error {
     $path = self::build_path( $function_name, $query_params, $skip_connect_id );
-    
+    Logger::debug('path: ', $path);
     self::$client->method = $method;
     self::$client->path = $path;
     self::$client->request_body = $request_body;
     self::$client->auth_header = self::build_auth_header();
   
     $result = self::$client->request();
-    $code = self::$client->code;
+    $code = self::$client->response_code;
 
     self::log_api_call(
       $function_name,
@@ -264,18 +282,27 @@ class FinconApi {
       return $error;
     endif;
 
+    $this->error = $result['ErrorInfo'];
+
     $data = $result['result'][0] ?? [];
+    $this->current_result_count = $data['Count'] ?? 0;
+    $this->total_result_count += $this->current_result_count;
+    $this->response_next_record = $data['RecNo'] ?? '';
 
-    if ( ! is_array( $data ) || empty( $data ) ) :
-        return new \WP_Error( 
-            'fincon_parse_error', 
-            __( 'Fincon API returned an invalid or empty response structure.', 'df-fincon' ),
-            [ 'raw_body' => $result ?? 'N/A' ]
-        );
-    endif;
+    if ( ! is_array( $data ) || empty( $data ) )
+      return new \WP_Error(
+          'fincon_parse_error',
+          __( 'Fincon API returned an invalid or empty response structure.', 'df-fincon' ),
+          [ 'raw_body' => $result ?? 'N/A' ]
+      );
 
-    if ( ! empty( $result['ErrorInfo'] ) ) 
-        return new \WP_Error( 'fincon_api_error', $result['ErrorInfo'] );
+    // Check for Fincon API errors in result[0]['ErrorInfo']
+    if ( ! empty( $data['ErrorInfo'] ) )
+      return new \WP_Error( 'fincon_api_error', $data['ErrorInfo'] );
+    
+    // Also check top-level ErrorInfo for backward compatibility
+    if ( ! empty( $result['ErrorInfo'] ) )
+      return new \WP_Error( 'fincon_api_error', $result['ErrorInfo'] );
     
     return $data;
   }
@@ -287,13 +314,13 @@ class FinconApi {
    * @param array $parameters Associative array of parameters to append to the URL.
    * @return string The resource path to append to the base URL.
    */
-  private static function build_path( string $function_name, array $parameters = [], $skip_connect_id = false ): string {
+  private function build_path( string $function_name, array $parameters = [], $skip_connect_id = false ): string {
     // Function name must be enclosed in quotes and URL encoded
     $path =  self::$base_url  . '%22' . $function_name . '%22' . '/';
 
     if ( !$skip_connect_id ) :
       if ( empty( self::$connect_id ) )
-        self::create_connect_id();
+        $this->create_connect_id();
       $path .= self::$connect_id . '/';
     endif;
 
@@ -312,6 +339,10 @@ class FinconApi {
     return $auth_header;
   }
 
+  public function has_more(): bool {
+    return ( $this->current_result_count === $this->batch_size );
+  }
+
   /**
    * Logs the API request and response details.
    *
@@ -320,8 +351,8 @@ class FinconApi {
    * @param array|\WP_Error $response_result The result of the client request.
    */
   private static function log_api_call(  string $function_name, string $method, string $path, string $code, array $request_body, mixed $result ): void {
-    if ( !self::$log_enabled )
-      return;
+    // if ( !self::$log_enabled )
+    //   return;
 
     $log_message = "--- API CALL: {$function_name} ---\n";
 
@@ -350,11 +381,11 @@ class FinconApi {
       $log_message .= 'Response: ' . "\n" . print_r( $result ?? '[]', true );
 
     // Check for HTTP error status or Fincon's internal ErrorInfo
-    if (  is_wp_error( $result ) || ( $code < 200 || $code >= 300 ) || ( isset( $response['result'][0]['ErrorInfo'] ) && ! empty( $response['result'][0]['ErrorInfo'] ) ) ) {
+    if (  is_wp_error( $result ) || ( $code < 200 || $code >= 300 ) || ( isset( $response['result'][0]['ErrorInfo'] ) && ! empty( $response['result'][0]['ErrorInfo'] ) ) ) 
       Logger::error( $log_message );
-    } else {
+    else 
       Logger::debug( $log_message );
-    }
+    
   }
 
   private static function is_invalid_connect_id_response( $result ): bool {
@@ -381,7 +412,7 @@ class FinconApi {
    * @param string $clear_connect_id The ConnectID to log out.
    * @return array|\WP_Error Returns ConnectID and APIVersion on success, or WP_Error.
    */
-  public static function login( $clear_connect_id = true ): array|\WP_Error {
+  public function login( $clear_connect_id = true ): array|\WP_Error {
     $function = 'Login';
     $method = 'GET';
     $parameters = [
@@ -395,13 +426,11 @@ class FinconApi {
     if ( $clear_connect_id ) 
       self::clear_connect_id();
 
-    $result = self::get_request( $function, $parameters, $skip_connect_id );
-    Logger::debug('Login response: ', $result );
+    $result = $this->get_request( $function, $parameters, $skip_connect_id );
 
     if ( is_wp_error( $result ) ) 
       return $result;
     
-    Logger::debug('$result["ConnectID"]',  $result['ConnectID'] );
     if ( ! isset( $result['ConnectID'] ) || empty( $result['ConnectID'] ) ) 
           return new \WP_Error( 'fincon_login_failed', __( 'Login failed: ConnectID was not returned.', 'df-fincon' ) );
     
@@ -436,11 +465,11 @@ class FinconApi {
    * @param bool $force_new If true, forces a new login attempt, ignoring existing ConnectID.
    * @return array|\WP_Error ConnectID and APIVersion on success, or WP_Error.
    */
-  public static function test_login( bool $force_new = true ): string | WP_Error {
+  public function test_login( bool $force_new = true ): string | WP_Error {
     if ( $force_new ) 
       FinconApi::clear_connect_id();
     
-    $login_result = self::login( $force_new );
+    $login_result = $this->login( $force_new );
 
     $login_test_message = '';
 
@@ -471,23 +500,27 @@ class FinconApi {
    * @return array|\WP_Error Returns ConnectID and APIVersion on success, or WP_Error.
    */
 
-  public static function get_stock_items( int $count = 10, int $start_offset = 0  ): array|\WP_Error {
+  public function get_stock_items( string $start_item_no = '', string $end_item_no = '', string $next_record = '0' ): array|\WP_Error {
     $function = 'GetStock';
+    
+    // Get web_only setting from product sync options (default to true for backward compatibility)
+    $options = ProductSync::get_options();
+    $web_only = ! empty( $options['import_web_only'] ) ? 1 : 0;
     $parameters = [
-        '', 
-        '', 
-        '00,01,03',
-        'true',
-        $start_offset, 
-        $count, 
+      $start_item_no,
+      $end_item_no,
+      LocationManager::create()->get_location_codes_string(),
+      $web_only,
+      $next_record,
+      $this->batch_size,
     ];
 
-    $result = self::get_request( $function, $parameters ) ?? [];
+    $result = $this->get_request( $function, $parameters );
     
-    if ( is_wp_error( $result ) ) 
+    if ( is_wp_error( $result ) )
       return $result;
 
-    if ( ! isset( $result['Stock'] ) || ! is_array( $result['Stock'] ) ) 
+    if ( ! isset( $result['Stock'] ) || ! is_array( $result['Stock'] ) )
       return new \WP_Error(
           'fincon_stock_parse_error',
           __( 'Fincon API returned stock data in an unexpected format.', 'df-fincon' ),
@@ -499,38 +532,111 @@ class FinconApi {
   }
 
   /**
+   * Get debtor accounts (customers)
+   */
+  public function GetDebAccounts( string $min_acc_no = '', string $max_acc_no = '', int $next_rec_no = 0, int $count = 100 ): array|\WP_Error {
+    $function = 'GetDebAccounts';
+
+    $parameters = [
+      $min_acc_no,
+      $max_acc_no,
+      $next_rec_no,
+      $count,
+    ];
+
+    $result = $this->get_request( $function, $parameters );
+
+    if ( is_wp_error( $result ) )
+      return $result;
+
+    if ( empty( $result ) )
+      return new \WP_Error(
+        'fincon_debtor_parse_error',
+        __( 'Fincon API returned customer data in an unexpected format.', 'df-fincon' ),
+        [ 'raw_response' => $result ]
+      );
+
+    if ( isset( $result['Debtors'] ) )
+      return $result;
+
+    // Some installations might still return Stock for backwards compatibility.
+    if ( isset( $result['Stock'] ) ) {
+      $result['Debtors'] = $result['Stock'];
+      unset( $result['Stock'] );
+    }
+
+    return $result;
+  }
+
+/**
+   * Get debtor accounts (customers)
+   */
+  public function GetDebAccountsByAccNo( string $acc_no, int $next_rec_no = 0, int $count = 1 ): array|\WP_Error {
+    $function = 'GetDebAccounts';
+
+    $parameters = [
+      $acc_no,
+      $acc_no,
+      $next_rec_no,
+      $count,
+    ];
+
+    $result = $this->get_request( $function, $parameters );
+    if ( is_wp_error( $result ) )
+      return $result;
+
+    if ( empty( $result ) )
+      return new \WP_Error(
+        'fincon_debtor_parse_error',
+        __( 'Fincon API returned customer data in an unexpected format.', 'df-fincon' ),
+        [ 'raw_response' => $result ]
+      );
+
+    if ( isset( $result['Debtors'] ) )
+      return $result;
+
+    // Some installations might still return Stock for backwards compatibility.
+    if ( isset( $result['Stock'] ) ) {
+      $result['Debtors'] = $result['Stock'];
+      unset( $result['Stock'] );
+    }
+
+    return $result;
+  }
+
+  /**
    * Get stock updated since FromDate
-   * API function: "Login" 
+   * API function: "Login"
    * Method: GET
-   * Parameters: 
+   * Parameters:
    *  - FromDate (format yyyymmdd)
    *  - FromTime (format hh:mm:ss)
    *  - LocNo (0 for default location)
    *  - WebOnly (false to include all items)
    *  - RecNo (Start offset)
    *  - Count (Number of records to fetch)
-   * 
+   *
    * @param string $clear_connect_id The ConnectID to log out.
    * @return array|\WP_Error Returns ConnectID and APIVersion on success, or WP_Error.
    */
 
-  public static function get_stock_items_changed( int $count = 10, int $start_offset = 0, string $fromDate = '20200101'  ): array|\WP_Error {
+  public function get_stock_items_changed( int $count = 10, int $start_offset = 0, string $fromDate = '20200101'  ): array|\WP_Error {
     $function = 'GetStock';
     $parameters = [
-        $fromDate, 
-        '00:00:00', 
-        '00,01,03',
+        $fromDate,
+        '00:00:00',
+        LocationManager::create()->get_location_codes_string(),
         'true',
-        $start_offset, 
-        $count, 
+        $start_offset,
+        $count,
     ];
 
-    $result = self::get_request( $function, $parameters ) ?? [];
+    $result = $this->get_request( $function, $parameters );
     
-    if ( is_wp_error( $result ) ) 
+    if ( is_wp_error( $result ) )
       return $result;
 
-    if ( ! isset( $result['Stock'] ) || ! is_array( $result['Stock'] ) ) 
+    if ( ! isset( $result['Stock'] ) || ! is_array( $result['Stock'] ) )
       return new \WP_Error(
           'fincon_stock_parse_error',
           __( 'Fincon API returned stock data in an unexpected format.', 'df-fincon' ),
@@ -539,6 +645,143 @@ class FinconApi {
     
     return $result;
 
+  }
+
+  /**
+   * Create a sales order in Fincon
+   * API function: "CreateSalesOrder"
+   * Method: POST
+   * Parameters:
+   *  - ConnectID
+   *  - SetAsApproved (true/false)
+   *
+   * @param array $order_data Sales order data including SalesOrderDetail array
+   * @param bool $set_as_approved Whether to set the order as approved (default: true for paid orders)
+   * @return array|\WP_Error API response with SalesOrderInfo or WP_Error
+   * @since 1.0.0
+   */
+  public function create_sales_order( array $order_data, bool $set_as_approved = true ): array|\WP_Error {
+    $function = 'CreateSalesOrder';
+    $query_params = [
+      $set_as_approved ? 'true' : 'false',
+    ];
+    
+    $result = $this->post_request( $function, $query_params, $order_data );
+    
+    if ( is_wp_error( $result ) )
+      return $result;
+
+    // The API returns result array with SalesOrderInfo
+    if ( ! isset( $result['SalesOrderInfo'] ) || empty( $result['SalesOrderInfo'] ) )
+      return new \WP_Error(
+        'fincon_sales_order_parse_error',
+        __( 'Fincon API returned sales order data in an unexpected format.', 'df-fincon' ),
+        [ 'raw_response' => $result ]
+      );
+
+    return $result;
+  }
+
+  /**
+   * Get PDF document from Fincon
+   * API function: "GetDocumentPdf"
+   * Method: GET
+   * Parameters:
+   *  - ConnectID
+   *  - DocType (e.g., 'I' for Invoice, 'C' for Credit Note)
+   *  - DocNo (document number)
+   *  - LayoutName (optional, blank for default)
+   *  - NoImages (optional, false to include images)
+   *
+   * @param string $doc_type Document type (e.g., 'I' for Invoice)
+   * @param string $doc_no Document number
+   * @param string $layout_name Layout name (optional, default empty)
+   * @param bool $no_images Whether to exclude images (optional, default false)
+   * @return array|\WP_Error API response with DocumentPdf base64 string or WP_Error
+   * @since 1.0.0
+   */
+  public function get_document_pdf( string $doc_type, string $doc_no, string $layout_name = '', bool $no_images = false ): array|\WP_Error {
+    $function = 'GetDocumentPdf';
+    $query_params = [
+      $doc_type,
+      $doc_no,
+      $layout_name,
+      $no_images ? 'true' : 'false',
+    ];
+    
+    $result = $this->get_request( $function, $query_params );
+    
+    if ( is_wp_error( $result ) )
+      return $result;
+
+    // The API returns result array with DocumentInfo containing DocumentPdf
+    if ( ! isset( $result['DocumentInfo'] ) || empty( $result['DocumentInfo'] ) )
+      return new \WP_Error(
+        'fincon_document_pdf_parse_error',
+        __( 'Fincon API returned document PDF data in an unexpected format.', 'df-fincon' ),
+        [ 'raw_response' => $result ]
+      );
+
+    return $result;
+  }
+
+  /**
+   * Get sales order by order number
+   * API function: "GetSalesOrdersByOrderNo"
+   * Method: GET
+   * Parameters:
+   *  - ConnectID
+   *  - MinOrderNo (minimum order number)
+   *  - MaxOrderNo (maximum order number)
+   *  - LocNo (stock location, blank for all)
+   *  - OutstandingOnly (true/false)
+   *  - ListTransactions (true/false)
+   *  - RecNo (record number, 0 for start)
+   *  - Count (number of records to fetch)
+   *
+   * @param string $order_no Sales order number
+   * @param string $loc_no Stock location (optional, default '')
+   * @param bool $outstanding_only Whether to only include outstanding orders (optional, default false)
+   * @param bool $list_transactions Whether to include detail transactions (optional, default true)
+   * @param int $rec_no Record number (optional, default 0)
+   * @param int $count Number of records (optional, default 1)
+   * @return array|\WP_Error API response with SalesOrderInfo or WP_Error
+   * @since 1.1.0
+   */
+  public function get_sales_order_by_order_no(
+    string $order_no,
+    string $loc_no = '',
+    bool $outstanding_only = false,
+    bool $list_transactions = true,
+    int $rec_no = 0,
+    int $count = 1
+  ): array|\WP_Error {
+    $function = 'GetSalesOrdersByOrderNo';
+    $query_params = [
+      $order_no,
+      $order_no,
+      $loc_no,
+      $outstanding_only ? 'true' : 'false',
+      $list_transactions ? 'true' : 'false',
+      $rec_no,
+      $count,
+    ];
+    
+    $result = $this->get_request( $function, $query_params );
+    
+    if ( is_wp_error( $result ) )
+      return $result;
+
+    // The API returns result array with SalesOrders
+    if ( ! isset( $result['SalesOrders'] ) || ! is_array( $result['SalesOrders'] ) || empty( $result['SalesOrders'] ) )
+      return new \WP_Error(
+        'fincon_sales_order_not_found',
+        __( 'Sales order not found or no data returned.', 'df-fincon' ),
+        [ 'raw_response' => $result ]
+      );
+
+    // Return the first sales order
+    return $result['SalesOrders'][0] ?? $result;
   }
 
 }

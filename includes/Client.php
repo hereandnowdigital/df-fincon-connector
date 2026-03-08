@@ -81,7 +81,7 @@ class Client {
    * HTTP response code
    * @var int
    */
-  public int $code = 0;
+  public int $response_code = 0;
 
   /**
    * HTTP response body JSON
@@ -96,7 +96,7 @@ class Client {
     $this->log_enabled = $log_enabled;
   }
 
-  public function request( ) {
+  public function request( ): array|\WP_Error {
     if ($this->request_body)
       $this->request_body_json = json_encode( $this->request_body );
 
@@ -114,7 +114,7 @@ class Client {
     if ( !empty( $this->auth_header ) )
       $args['headers']['Authorization'] = $this->auth_header;
 
-    $this->log( 'API Request: ', $args ); 
+    $this->log( 'API Request: ', $args );
 
     $this->response = wp_remote_request( $this->path, $args );
     $this->log( 'API Response: ', $this->response );
@@ -122,13 +122,18 @@ class Client {
     if ( is_wp_error( $this->response ) )
       return $this->response;
 
-    $this->code = wp_remote_retrieve_response_code( $this->response );
+    $this->response_code = wp_remote_retrieve_response_code( $this->response );
 
-    if ( $this->code < 200 || $this->code >= 300 )
-      return new WP_Error( 'http_error', 'Unexpected HTTP status: ' . $this->code, $this->response );
+    if ( $this->response_code < 200 || $this->response_code >= 300 )
+      return new \WP_Error( 'http_error', 'Unexpected HTTP status: ' . $this->response_code, $this->response );
 
     $this->response_body = wp_remote_retrieve_body( $this->response );
-    return json_decode( $this->response_body, true );
+    $decoded = json_decode( $this->response_body, true );
+    
+    if ( $decoded === null && $this->response_body !== '' && $this->response_body !== 'null' )
+      return new \WP_Error( 'json_decode_error', 'Failed to decode JSON response: ' . $this->response_body );
+    
+    return $decoded ?? [];
   }
 
   private function log( $message = '', $context = [] ) {

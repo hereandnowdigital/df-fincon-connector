@@ -1,0 +1,88 @@
+GET: {{base_url}}"GetSalesOrdersByOrderNo"/{{ConnectID}}/00243852/00243852/00/0/1/0/100
+
+Response:
+
+{
+    "result": [
+        {
+            "Count": 1,
+            "RecNo": 28331,
+            "ErrorInfo": "",
+            "SalesOrders": [
+                {
+                    "OrderNo": "00243852",
+                    "AccNo": "TES013",
+                    "LocNo": "01",
+                    "QuoteNo": "",
+                    "OrderType": "N",
+                    "OrderDate": "20260302",
+                    "DateRequired": "20260302",
+                    "ExpiryDate": "        ",
+                    "TotalExcl": 0.0,
+                    "TotalTax": 0.0,
+                    "CurrencyCode": "00",
+                    "ExchangeRate": 1.0,
+                    "CustomerRef": "WC-20206",
+                    "DebName": "DIGITAL FOLD PTY LTD",
+                    "Addr1": "UNIT 29, 0A COMORANT AVENUE",
+                    "Addr2": "BONA VIEW",
+                    "Addr3": "CAPE TOWN",
+                    "PCode": "7441",
+                    "DelName": "RICHE DEALERTHREE",
+                    "DelAddr1": "UNIT 29, 0A COMORANT AVENUE",
+                    "DelAddr2": "BONA VIEW",
+                    "DelAddr3": "CAPE TOWN",
+                    "DelAddr4": "WC",
+                    "DelPCode": "7441",
+                    "Latitude": "",
+                    "Longitude": "",
+                    "Licence": "",
+                    "DelInstruc1": "STANDARD SHIPPING",
+                    "DelInstruc2": "",
+                    "DelInstruc3": "",
+                    "DelInstruc4": "",
+                    "DelInstruc5": "",
+                    "DelInstruc6": "",
+                    "DeliveryMethod": "D",
+                    "RepCode": "089",
+                    "TaxNo": "4500295581",
+                    "Approved": "Y",
+                    "InvLayoutName": "",
+                    "NumberOfItems": 1.0,
+                    "InvoiceNumbers": "00256755",
+                    "Status": "Invoiced",
+                    "Assembly": "N",
+                    "SupRebate": "N",
+                    "FinconPushID": "",
+                    "SalesOrderDetail": [
+                        {
+                            "Entry": "O",
+                            "DocNo": "00243852",
+                            "ItemNo": "YLYTD-0011",
+                            "Group": 0,
+                            "Quantity": 1.0,
+                            "LineTotalExcl": 312.17,
+                            "TaxCode": 1,
+                            "LineTotalTax": 0.0,
+                            "Description": "YEELIGHT 4 IN 1 RECHARBEABLE TABLE LAMP",
+                            "UnitCost": 289.1918
+                        },
+                        {
+                            "Entry": "I",
+                            "DocNo": "00256755",
+                            "ItemNo": "YLYTD-0011",
+                            "Group": 0,
+                            "Quantity": -1.0,
+                            "LineTotalExcl": -312.17,
+                            "TaxCode": 1,
+                            "LineTotalTax": 0.0,
+                            "Description": "YEELIGHT 4 IN 1 RECHARBEABLE TABLE LAMP",
+                            "UnitCost": 289.1918
+                        }
+                    ],
+                    "GroupDetail": []
+                }
+            ]
+        }
+    ]
+}

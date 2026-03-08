@@ -1,0 +1,23 @@
+{
+  "AccNo": "TES001",
+  "LocNo": "00",
+  "DateRequired": "20251215",
+  "CustomerRef": "TEST ORDER",
+  "RepCode": "079",
+  "SalesOrderDetail": [
+    {
+      "ItemNo": "Z-WD",
+      "Quantity": 9,
+      "Description": "",
+      "TaxCode": 1
+    }
+  ]
+}
+
+{
+    "result": [
+        {
+            "ErrorInfo": "Z-WD - Invalid or inactive item number."
+        }
+    ]
+}

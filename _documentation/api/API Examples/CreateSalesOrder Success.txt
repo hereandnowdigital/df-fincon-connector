@@ -1,0 +1,102 @@
+POST {{base_url}}"CreateSalesOrder"/{{ConnectID}}/true/
+Body:
+{
+  "AccNo": "<WooCommerce Customer Meta Field [_fincon_accno]>",
+  "LocNo": "00",
+  "DateRequired": "20251215",
+  "CustomerRef": "TEST ORDER",
+  "RepCode": "079",
+  "SalesOrderDetail": [
+    {
+      "ItemNo": "<WooCommerce SKU>",
+      "Quantity": 1,
+      "LineTotalExcl": "11",
+      "Description": "<WooCommerce Product Title>",
+      "TaxCode": 1
+    }
+  ],
+  "SalesOrderPayment": {
+    "ReceiptNo": "<WooCommerce Order Number>", 
+    "PayType": "C",
+    "CardNo": "**** **** **** ****",
+    "Amount": "11"
+  }
+}
+
+response:
+{
+    "result": [
+        {
+            "ErrorInfo": "",
+            "SalesOrderInfo": {
+                "OrderNo": "00243841",
+                "AccNo": "TES001",
+                "LocNo": "00",
+                "QuoteNo": "",
+                "OrderType": "N",
+                "OrderDate": "20251229",
+                "DateRequired": "20251229",
+                "ExpiryDate": "        ",
+                "TotalExcl": 0.0,
+                "TotalTax": 0.0,
+                "CurrencyCode": "00",
+                "ExchangeRate": 1.0,
+                "CustomerRef": "TEST ORDER",
+                "DebName": "TEST",
+                "Addr1": "UNIT 12 & 13  RIVERGATE PARK 2",
+                "Addr2": "35 COLUMBUS CRESCENT PARKLANDS",
+                "Addr3": "CAPE TOWN",
+                "PCode": "7441",
+                "DelName": "TEST",
+                "DelAddr1": "UNIT 12 & 13  RIVERGATE PARK 2",
+                "DelAddr2": "35 COLUMBUS CRESCENT PARKLANDS",
+                "DelAddr3": "CAPE TOWN",
+                "DelAddr4": "WESTERN CAPE",
+                "DelPCode": "7441",
+                "DelInstruc1": "",
+                "DelInstruc2": "",
+                "DelInstruc3": "",
+                "DelInstruc4": "",
+                "DelInstruc5": "",
+                "DelInstruc6": "",
+                "DeliveryMethod": "C",
+                "RepCode": "079",
+                "TaxNo": "",
+                "Approved": "Y",
+                "InvLayoutName": "",
+                "NumberOfItems": 1.0,
+                "InvoiceNumbers": "",
+                "Status": "Entered",
+                "Assembly": "N",
+                "SalesOrderDetail": [
+                    {
+                        "Entry": "O",
+                        "DocNo": "00243840",
+                        "ItemNo": "A",
+                        "Group": 0,
+                        "Quantity": 1.0,
+                        "LineTotalExcl": 0.0,
+                        "TaxCode": 1,
+                        "LineTotalTax": 0.0,
+                        "Description": "TEST ITEM",
+                        "UnitCost": 0.0
+                    }
+                ],
+                "GroupDetail": [],
+                "SalesOrderPayment": {
+                    "ReceiptNo": "",
+                    "PayType": "C",
+                    "CardNo": "**** **** **** ****",
+                    "Amount": <WooCommerce Payment Gateway Total>
+                },
+                "SalesOrderGiftCard": {
+                    "ReceiptNo": "",
+                    "GiftCardNo": "",
+                    "Comment": "",
+                    "Amount": 0.0,
+                    "Balance": 0.0
+                }
+            }
+        }
+    ]
+}
