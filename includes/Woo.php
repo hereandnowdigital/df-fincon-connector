@@ -30,6 +30,8 @@ class Woo {
   private const USER_ROLE_RETAIL = CustomerSync::ROLE_RETAIL;
   private const USER_ROLE_DEALER = CustomerSync::ROLE_DEALER;
 
+  private const USER_META_DBG_DEALER_SUB_ACCOUNT = CustomerSync::META_DBG_DEALER_SUB_ACCOUNT;
+
   private const FIELD_DELIVERY_INSTRUCTIONS = CustomerSync::META_DELIVERY_INSTRUCTIONS;
   
   /**
@@ -73,6 +75,15 @@ class Woo {
   private static function register_actions_users(): void {
     add_action( 'init', [ __CLASS__, 'register_roles' ] );
     add_action( 'woocommerce_edit_account_form', [ __CLASS__, 'display_frontend_session_pricing_button' ] );
+    add_filter( 'woocommerce_address_to_edit', [ __CLASS__, 'disable_myaccount_address_fields_for_dbg_dealer' ], 10, 2 );
+    
+    // My Account addresses page modifications for DBG Dealer sub accounts
+    add_action( 'woocommerce_account_content', [ __CLASS__, 'maybe_display_dbg_dealer_address_message' ] );
+    add_action( 'woocommerce_after_edit_address_form_(load_address)', [ __CLASS__, 'maybe_disable_save_address_button' ] );
+    add_filter( 'woocommerce_my_account_my_address_description', [ __CLASS__, 'modify_my_address_description' ], 10, 1 );
+    
+    // Remove addresses link from My Account navigation for DBG Dealer sub accounts
+    add_filter( 'woocommerce_account_menu_items', [ __CLASS__, 'maybe_remove_addresses_menu_item' ] );
   }
 
   /**
@@ -90,6 +101,12 @@ class Woo {
     add_action( 'woocommerce_after_order_details', [ __CLASS__, 'add_pdf_download_to_order_view' ] );
     add_action( 'woocommerce_after_thankyou_title', [ __CLASS__, 'display_location_in_order_view' ] );
 add_action( 'woocommerce_after_order_details', [ __CLASS__, 'display_location_in_order_view' ] );
+    
+    // Disable address fields for DBG Dealer sub accounts
+    add_filter( 'woocommerce_checkout_fields', [ __CLASS__, 'disable_address_fields_for_dbg_dealer' ] );
+    
+    // Display notice for DBG Dealer sub accounts on checkout
+    add_action( 'woocommerce_before_checkout_billing_form', [ __CLASS__, 'maybe_display_checkout_notice_for_dbg_dealer' ] );
     
     // Cart page integration
     add_action( 'wp_ajax_df_fincon_update_cart_location', [ __CLASS__, 'update_cart_location_ajax' ] );
@@ -1207,6 +1224,221 @@ add_action( 'woocommerce_after_order_details', [ __CLASS__, 'display_location_in
     ];
   }
 
+  /**
+   * Check if current user has DBG Dealer sub account enabled
+   *
+   * @return bool True if enabled, false otherwise
+   * @since 1.0.0
+   */
+  public static function is_dbg_dealer_sub_account_enabled(): bool {
+    if ( ! is_user_logged_in() ) {
+      return false;
+    }
+    
+    $user_id = get_current_user_id();
+    return (bool) get_user_meta( $user_id, self::USER_META_DBG_DEALER_SUB_ACCOUNT, true );
+  }
+  
+  /**
+   * Disable address fields on checkout for DBG Dealer sub accounts
+   *
+   * @param array $fields Checkout fields
+   * @return array Modified checkout fields
+   * @since 1.0.0
+   */
+  public static function disable_address_fields_for_dbg_dealer( array $fields ): array {
+    // Check if user is logged in
+    if ( ! is_user_logged_in() ) {
+      return $fields;
+    }
+    
+    $user_id = get_current_user_id();
+    $is_dbg_dealer_sub_account = (bool) get_user_meta( $user_id, self::USER_META_DBG_DEALER_SUB_ACCOUNT, true );
+    
+    if ( ! $is_dbg_dealer_sub_account ) {
+      return $fields;
+    }
+    
+    // Define address fields to disable
+    $address_fields_to_disable = [
+      'billing_first_name',
+      'billing_last_name',
+      'billing_company',
+      'billing_address_1',
+      'billing_address_2',
+      'billing_city',
+      'billing_state',
+      'billing_postcode',
+      'billing_country',
+      'billing_phone',
+      'billing_email',
+      'shipping_first_name',
+      'shipping_last_name',
+      'shipping_company',
+      'shipping_address_1',
+      'shipping_address_2',
+      'shipping_city',
+      'shipping_state',
+      'shipping_postcode',
+      'shipping_country',
+    ];
+    
+    // Make fields readonly and disabled
+    foreach ( $address_fields_to_disable as $field_key ) {
+      if ( isset( $fields['billing'][$field_key] ) ) {
+        $fields['billing'][$field_key]['custom_attributes']['readonly'] = 'readonly';
+        $fields['billing'][$field_key]['custom_attributes']['disabled'] = 'disabled';
+        $fields['billing'][$field_key]['class'][] = 'df-fincon-field-disabled';
+      }
+      if ( isset( $fields['shipping'][$field_key] ) ) {
+        $fields['shipping'][$field_key]['custom_attributes']['readonly'] = 'readonly';
+        $fields['shipping'][$field_key]['custom_attributes']['disabled'] = 'disabled';
+        $fields['shipping'][$field_key]['class'][] = 'df-fincon-field-disabled';
+      }
+    }
+    
+    return $fields;
+  }
+  
+  /**
+   * Disable address fields on My Account edit address page for DBG Dealer sub accounts
+   *
+   * @param array $fields Address fields
+   * @param string $load_address Type of address (billing or shipping)
+   * @return array Modified address fields
+   * @since 1.0.0
+   */
+  public static function disable_myaccount_address_fields_for_dbg_dealer( array $fields, string $load_address ): array {
+    if ( ! self::is_dbg_dealer_sub_account_enabled() ) {
+      return $fields;
+    }
+    
+    // Define address fields to disable (both billing and shipping)
+    $address_fields_to_disable = [
+      'first_name',
+      'last_name',
+      'company',
+      'address_1',
+      'address_2',
+      'city',
+      'state',
+      'postcode',
+      'country',
+      'phone',
+      'email',
+    ];
+    
+    // Make fields readonly and disabled
+    foreach ( $address_fields_to_disable as $field_key ) {
+      $full_field_key = $load_address . '_' . $field_key;
+      if ( isset( $fields[$full_field_key] ) ) {
+        $fields[$full_field_key]['custom_attributes']['readonly'] = 'readonly';
+        $fields[$full_field_key]['custom_attributes']['disabled'] = 'disabled';
+        $fields[$full_field_key]['class'][] = 'df-fincon-field-disabled';
+      }
+    }
+    
+    return $fields;
+  }
+  
+  /**
+   * Display message on My Account addresses page for DBG Dealer sub accounts
+   *
+   * @return void
+   * @since 1.0.0
+   */
+  public static function maybe_display_dbg_dealer_address_message(): void {
+    if ( ! self::is_dbg_dealer_sub_account_enabled() ) {
+      return;
+    }
+    
+    // This hook runs on the addresses page (woocommerce_before_account_addresses)
+    // No need for additional checks
+    echo '<div class="woocommerce-message woocommerce-info df-fincon-dbg-dealer-message" style="margin-bottom: 20px;">';
+    echo '<p><strong>' . esc_html__( 'Addresses managed by your main DBG Dealer account', 'df-fincon' ) . '</strong></p>';
+    echo '<p>' . esc_html__( 'Please contact your main DBG Dealer account administrator for address changes.', 'df-fincon' ) . '</p>';
+    echo '</div>';
+  }
+  
+  /**
+   * Disable save address button on edit address page for DBG Dealer sub accounts
+   *
+   * @return void
+   * @since 1.0.0
+   */
+  public static function maybe_disable_save_address_button(): void {
+    if ( ! self::is_dbg_dealer_sub_account_enabled() ) {
+      return;
+    }
+    
+    // Output JavaScript to disable the save button
+    ?>
+    <script>
+    jQuery(document).ready(function($) {
+      // Disable the save address button
+      $('button[name="save_address"]').prop('disabled', true).addClass('disabled');
+      
+      // Also hide the button if preferred
+      // $('button[name="save_address"]').hide();
+    });
+    </script>
+    <?php
+  }
+  
+  /**
+   * Modify My Address description to remove edit links for DBG Dealer sub accounts
+   *
+   * @param string $description Current description
+   * @return string Modified description
+   * @since 1.0.0
+   */
+  public static function modify_my_address_description( string $description ): string {
+    if ( ! self::is_dbg_dealer_sub_account_enabled() ) {
+      return $description;
+    }
+    
+    // Remove edit links from the description - matches "Edit", "Edit Billing address", "Edit Shipping address", etc.
+    $description = preg_replace( '/<a[^>]*>Edit[^<]*<\/a>/i', '', $description );
+    
+    return $description;
+  }
+  
+  /**
+   * Remove addresses menu item from My Account navigation for DBG Dealer sub accounts
+   *
+   * @param array $menu_items My Account menu items
+   * @return array Filtered menu items
+   * @since 1.0.0
+   */
+  public static function maybe_remove_addresses_menu_item( array $menu_items ): array {
+    if ( ! self::is_dbg_dealer_sub_account_enabled() ) {
+      return $menu_items;
+    }
+    
+    // Remove the addresses menu item
+    unset( $menu_items['edit-address'] );
+    
+    return $menu_items;
+  }
+  
+  /**
+   * Display checkout notice for DBG Dealer sub accounts
+   *
+   * @return void
+   * @since 1.0.0
+   */
+  public static function maybe_display_checkout_notice_for_dbg_dealer(): void {
+    if ( ! self::is_dbg_dealer_sub_account_enabled() ) {
+      return;
+    }
+    
+    echo '<div class="woocommerce-message woocommerce-info df-fincon-dbg-dealer-checkout-notice" style="margin-bottom: 20px;">';
+    echo '<p><strong>' . esc_html__( 'Address Management Notice', 'df-fincon' ) . '</strong></p>';
+    echo '<p>' . esc_html__( 'Your billing and shipping addresses are managed by your main DBG Dealer account and cannot be edited here.', 'df-fincon' ) . '</p>';
+    echo '<p>' . esc_html__( 'Please contact your main DBG Dealer account administrator for any address changes.', 'df-fincon' ) . '</p>';
+    echo '</div>';
+  }
+  
   /**
    * Display "Clear session pricing" button on frontend account edit page
    *

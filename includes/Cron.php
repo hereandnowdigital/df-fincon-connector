@@ -50,7 +50,27 @@ class Cron {
    */
   public static function init_cron_schedule(): void {
     Logger::debug( 'Initializing cron schedules on plugin load' );
-    self::add_cron_schedule();
+    
+    // Product sync - only schedule if not already scheduled
+    if ( ! wp_next_scheduled( self::HOOK ) ) {
+      $options = ProductSync::get_options();
+      if ( ! empty( $options['sync_schedule_enabled'] ) ) {
+        self::add_product_cron_schedule();
+      }
+    }
+
+    // Customer sync - only schedule if not already scheduled
+    if ( ! wp_next_scheduled( self::CUSTOMER_HOOK ) ) {
+      $options = CustomerSync::get_options();
+      if ( ! empty( $options['customer_sync_schedule_enabled'] ) ) {
+        self::add_customer_cron_schedule();
+      }
+    }
+
+    // Invoice check - only schedule if not already scheduled
+    if ( ! wp_next_scheduled( self::INVOICE_CHECK_HOOK ) ) {
+      self::schedule_invoice_check();
+    }
   }
 
   private static function register_filters() {
@@ -93,6 +113,7 @@ class Cron {
      * Initialize cron scheduling based on product settings
      */
     public static function add_product_cron_schedule(): void {
+      // Clear existing schedule before creating new one
       self::clear_product_cron_schedule();
       $options = ProductSync::get_options();
       
@@ -141,6 +162,7 @@ class Cron {
         'caller' => debug_backtrace( DEBUG_BACKTRACE_IGNORE_ARGS, 2 )[1]['function'] ?? 'unknown',
       ] );
       
+      // Clear existing schedule before creating new one
       self::clear_customer_cron_schedule();
       $options = CustomerSync::get_options();
       
@@ -371,43 +393,89 @@ class Cron {
       $start_timestamp = current_time( 'timestamp' );
       self::log_cron_run( 'started', $start_time, 0, '', 'product' );
       
-      $result = FinconService::import_products();
+      // Start product cron log if enabled
+      $cron_logger = ProductCronLogger::create();
+      $cron_log_started = $cron_logger->start_log();
+      
+      $is_complete = false;
+      $first_batch = true;
+      $total_created = 0;
+      $total_updated = 0;
+      $total_skipped = 0;
+      $total_imported = 0;
+      $total_processed = 0;
+      $has_error = false;
+      $error_message = '';
+      
+      while ( ! $is_complete && ! $has_error ) {
+        // For first batch, don't resume. For subsequent batches, resume from progress
+        $result = FinconService::import_products( 0, ! $first_batch );
+        $first_batch = false;
+        
+        if ( is_wp_error( $result ) ) :
+          $error_message = $result->get_error_message();
+          $has_error = true;
+          break;
+        endif;
+        
+        // Accumulate totals
+        $total_created += $result['created_count'] ?? 0;
+        $total_updated += $result['updated_count'] ?? 0;
+        $total_skipped += $result['skipped_count'] ?? 0;
+        $total_imported += $result['imported_count'] ?? 0;
+        
+        $batch_state = $result['batch_state'] ?? [];
+        $total_processed = $batch_state['total_processed'] ?? 0;
+        $is_complete = $result['batch_complete'] ?? false;
+      }
       
       $end_time = current_time( 'mysql' );
       $end_timestamp = current_time( 'timestamp' );
       $duration = $end_timestamp - $start_timestamp;
 
-      if ( is_wp_error( $result ) ) :
-        $error_message = $result->get_error_message();
+      if ( $has_error ) :
         self::log_cron_run( 'failed', $end_time, $duration, $error_message, 'product' );
         Logger::error( 'Scheduled product sync failed: ' . $error_message, $result );
-      else :
-        $batch_state = $result['batch_state'] ?? [];
-        $is_complete = $result['batch_complete'] ?? false;
-        $total_processed = $batch_state['total_processed'] ?? 0;
         
+        // Complete product cron log with error
+        if ( $cron_log_started ) :
+          $cron_logger->complete_log( 0, 0, 0, 0, $duration );
+        endif;
+      else :
         if ( $is_complete ) :
           $summary = sprintf(
             'Batch import COMPLETED. Total: %d (Imported: %d, Created: %d, Updated: %d, Skipped: %d)',
             $total_processed,
-            $result['imported_count'] ?? 0,
-            $result['created_count'] ?? 0,
-            $result['updated_count'] ?? 0,
-            $result['skipped_count'] ?? 0
+            $total_imported,
+            $total_created,
+            $total_updated,
+            $total_skipped
           );
         else :
+          // This shouldn't happen with our loop, but keep as fallback
           $summary = sprintf(
             'Batch: %d (Imported: %d, Created: %d, Updated: %d, Skipped: %d). Total processed so far: %d. More batches remaining.',
             $result['api_count'] ?? 0,
-            $result['imported_count'] ?? 0,
-            $result['created_count'] ?? 0,
-            $result['updated_count'] ?? 0,
-            $result['skipped_count'] ?? 0,
+            $total_imported,
+            $total_created,
+            $total_updated,
+            $total_skipped,
             $total_processed
           );
         endif;
 
         self::log_cron_run( 'completed', $end_time, $duration, $summary, 'product' );
+        
+        // Complete product cron log with summary
+        if ( $cron_log_started ) :
+          $cron_logger->complete_log(
+            $total_processed,
+            $total_created,
+            $total_updated,
+            $total_skipped,
+            $duration
+          );
+        endif;
       endif;
     }
 

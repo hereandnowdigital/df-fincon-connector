@@ -3,21 +3,31 @@
   <p><?php esc_html_e( 'Use this tool to import products from the FinCon API into WooCommerce. Start with a small count for testing.', 'df-fincon' ); ?></p>
 
   <div class="df-fincon-import-controls">
+    
+    <!-- Single Product Import Form -->
+    <h2><?php esc_html_e( 'Import Single Product', 'df-fincon' ); ?></h2>
     <table class="form-table">
       <tbody>
-        <tr>
-          <th col-span="2"><?php _e("IMPORT SINGLE PRODUCT", 'df-fincon');?></th>
-        </tr>  
         <tr>
           <th scope="row"><label for="df_fincon_import_product_item_code"><?php esc_html_e( 'Product item code', 'df-fincon' ); ?></label></th>
           <td>
             <input type="text" id="df_fincon_import_product_item_code" value="" class="regular-text" placeholder="<?php esc_html_e( 'E.g. A', 'df-fincon' ); ?>" />
             <p class="description"><?php esc_html_e( 'Enter item code (SKU) of product to import/update', 'df-fincon' ); ?></p>
           </td>
-        </tr>            
-        <tr>
-          <th col-span="2"><?php _e("OR IMPORT BATCH", 'df-fincon');?></th>
-        </tr>  
+        </tr>
+      </tbody>
+    </table>
+    <p class="submit">
+      <button id="df-fincon-import-single-btn" class="button button-primary"><?php esc_html_e( 'Import Single Product', 'df-fincon' ); ?></button>
+      <span id="df-fincon-single-feedback" style="margin-left: 15px;"></span>
+    </p>
+
+    <hr style="margin: 30px 0;">
+
+    <!-- Batch Product Import Form -->
+    <h2><?php esc_html_e( 'Batch Import Products', 'df-fincon' ); ?></h2>
+    <table class="form-table">
+      <tbody>
         <tr>
           <th scope="row"><label for="df_fincon_import_count"><?php esc_html_e( 'Number of products to import', 'df-fincon' ); ?></label></th>
           <td>
@@ -25,7 +35,6 @@
             <p class="description"><?php esc_html_e( 'Enter 0 to import all products. The import will process in batches and can be resumed if interrupted.', 'df-fincon' ); ?></p>
           </td>
         </tr>
-           
       </tbody>
     </table>
     
@@ -46,11 +55,12 @@
     <?php endif; ?>
     
     <p class="submit">
-      <button id="df-fincon-import-btn" class="button button-primary"><?php esc_html_e( 'Start New Import', 'df-fincon' ); ?></button>
+      <button id="df-fincon-import-batch-btn" class="button button-primary"><?php esc_html_e( 'Start Batch Import', 'df-fincon' ); ?></button>
       <?php if ( ! empty( $progress['in_progress'] ) ) : ?>
         <button id="df-fincon-resume-import-btn" class="button button-secondary"><?php esc_html_e( 'Resume Import', 'df-fincon' ); ?></button>
         <button id="df-fincon-reset-import-btn" class="button"><?php esc_html_e( 'Reset Progress', 'df-fincon' ); ?></button>
       <?php endif; ?>
+      <span id="df-fincon-batch-feedback" style="margin-left: 15px;"></span>
     </p>
   </div>
 

@@ -35,6 +35,8 @@ class CustomerSync {
 
   public const META_LAST_SYNC_TIMESTAMP = '_fincon_last_sync_timestamp';
 
+  public const META_DBG_DEALER_SUB_ACCOUNT = '_fincon_dbg_dealer_sub_account';
+
   const ROLE_RETAIL = 'df_customer_retail';
 
   const ROLE_DEALER = 'df_customer_dealer';

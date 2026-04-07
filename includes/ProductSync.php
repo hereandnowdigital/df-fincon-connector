@@ -312,32 +312,93 @@ class ProductSync {
     $skipped_count = 0;
     $errors = [];
 
-    if ( ! empty( $stock_items ) ) 
+    if ( ! empty( $stock_items ) )
       foreach ( $stock_items as $item ) {
 
         $item_no = $item['ItemNo'] ?? 'N/A';
         $item_desc = $item['Description'] ?? 'No Description';
-        
+        $item_active = $item['Active'] ?? 'N';
+
         if ( empty( $item_no ) || $item_no === 'N/A' ) {
           $skipped_count++;
-          $errors[] = __('Skipped item due to missing ItemNo');
+          $errors[] = __('Skipped item - missing ItemNo');
+          
+          // Log skipped product if cron logging is enabled
+          try {
+            $cron_logger = ProductCronLogger::create();
+            if ( $cron_logger->is_enabled() ) {
+              $cron_logger->log_product( $item_no, 0, 'skipped', 'missing ItemNo' );
+            }
+          } catch ( \Exception $e ) {
+            // Silently fail logging to not disrupt import
+          }
+          
+          continue;
+        }
+
+
+        if ( strtoupper(trim($item_active)) !== 'Y' ) {
+          $skipped_count++;
+          $errors[] = __('Skipped item - item not Active on Fincon');
+          
+          // Log skipped product if cron logging is enabled
+          try {
+            $cron_logger = ProductCronLogger::create();
+            if ( $cron_logger->is_enabled() ) {
+              $cron_logger->log_product( $item_no, 0, 'skipped', 'missing ItemNo' );
+            }
+          } catch ( \Exception $e ) {
+            // Silently fail logging to not disrupt import
+          }
+          
           continue;
         }
 
         try {
-          $status = self::create_or_update_wc_product( $item);
-            if ( $status === self::PROD_STATUS_CREATE ) 
-              $created_count++;
-            elseif ( $status === self::PROD_STATUS_UPDATE ) 
-              $updated_count++;
-            elseif ( $status === self::PROD_STATUS_SKIP ) 
-              $skipped_count++;
-            
-            $imported_count++;
+          $result = self::create_or_update_wc_product( $item);
+          $status = $result['status'];
+          $product_id = $result['product_id'] ?? 0;
+          $sku = $result['sku'] ?? $item_no;
+          
+          if ( $status === self::PROD_STATUS_CREATE )
+            $created_count++;
+          elseif ( $status === self::PROD_STATUS_UPDATE )
+            $updated_count++;
+          elseif ( $status === self::PROD_STATUS_SKIP )
+            $skipped_count++;
+          
+          $imported_count++;
+
+          // Log product import result if cron logging is enabled
+          try {
+            $cron_logger = ProductCronLogger::create();
+            if ( $cron_logger->is_enabled() ) {
+              $status_label = match( $status ) {
+                self::PROD_STATUS_CREATE => 'created',
+                self::PROD_STATUS_UPDATE => 'updated',
+                self::PROD_STATUS_SKIP => 'skipped',
+                default => 'unknown',
+              };
+              $cron_logger->log_product( $sku, $product_id, $status_label );
+            }
+          } catch ( \Exception $e ) {
+            // Silently fail logging to not disrupt import
+          }
 
         } catch ( \Exception $e ) {
             $skipped_count++;
-            $errors[] = sprintf( 'Failed to import Item %s (%s): %s', $item_no, $item_desc, $e->getMessage() );
+            $error_message = sprintf( 'Failed to import Item %s (%s): %s', $item_no, $item_desc, $e->getMessage() );
+            $errors[] = $error_message;
+            
+            // Log failed product if cron logging is enabled
+            try {
+              $cron_logger = ProductCronLogger::create();
+              if ( $cron_logger->is_enabled() ) {
+                $cron_logger->log_product( $item_no, 0, 'failed', $e->getMessage() );
+              }
+            } catch ( \Exception $log_e ) {
+              // Silently fail logging to not disrupt import
+            }
         }
       }
     
@@ -360,101 +421,112 @@ class ProductSync {
   }
 
    /**
-   * Creates or updates a WooCommerce product based on Fincon data.
-   * @param array $fincon_item Fincon StockRecord data.
-   * @param bool $update_only_changed If true, only update products with a newer Fincon ChangeDate.
-   * @return string $tatus Status of product import
-   */
-  public static function create_or_update_wc_product( array $fincon_item ): string {
-    $options = self::get_options();
-    $update_only_changed = ! empty( $options['import_update_only_changed'] );
-    $sku = $fincon_item['ItemNo'] ?? '';
-    $fincon_change_date = $fincon_item['ChangeDate']; // Format CCYYMMDD
-    $fincon_change_time = $fincon_item['ChangeTime']; // Format HH:MM:SS
-    
-    $fincon_timestamp_str = substr($fincon_change_date, 0, 4) . '-' . substr($fincon_change_date, 4, 2) . '-' . substr($fincon_change_date, 6, 2);
-    $fincon_timestamp_str .= ' ' . substr($fincon_change_time, 0, 8);
-    $fincon_timestamp = (int) strtotime( $fincon_timestamp_str );
-
-    $product_id = wc_get_product_id_by_sku( $sku );
-    
-    $status = self::PROD_STATUS_CREATE;
-            
-    if ( $product_id ) :
-        $product = wc_get_product( $product_id );
-        $status = self::PROD_STATUS_UPDATE;
-        
-        if ( ! $product ) 
-          throw new \Exception( "Could not load WC product for ID: {$product_id}" );
-        
-        // Check if update is needed based on timestamps
-        if ( $update_only_changed ) :
-          $last_sync_timestamp = (int) $product->get_meta( self::FINCON_PRODUCT_CHANGED_META_KEY, true );
-          
-          // If last_sync_timestamp is more recent than fincon_timestamp, skip the update
-          if ( $last_sync_timestamp > $fincon_timestamp ) :
-            LOGGER::debug('last_sync_timestamp: ' . $last_sync_timestamp);
-            LOGGER::debug('fincon_timestamp: ' . $fincon_timestamp);
-            LOGGER::debug( 'Skipping update - last_sync_timestamp is more recent than fincon_timestamp' );
-            $status = self::PROD_STATUS_SKIP;
-          endif;
-            
-        endif;
-        
-    else :
-        $product = new \WC_Product_Simple();
-        $product->set_sku( $sku );
-        $product->set_status( 'draft' );
-
-    endif;
-
-    // Stock levels should ALWAYS be updated, regardless of skip status
-    // Pass false for save_product since we save at the end
-    self::update_product_stock( $product, $fincon_item, false );
-
-    // Only update product details if not skipping
-    if ( $status !== self::PROD_STATUS_SKIP ) :
-      self::update_product_price( $product, $fincon_item );
-
-      $product->set_name( $fincon_item['Description'] );
-
-      $product->set_manage_stock( true );
+    * Creates or updates a WooCommerce product based on Fincon data.
+    * @param array $fincon_item Fincon StockRecord data.
+    * @param bool $update_only_changed If true, only update products with a newer Fincon ChangeDate.
+    * @return array Array with 'status' and 'product_id' keys
+    */
+   public static function create_or_update_wc_product( array $fincon_item ): array {
+     $options = self::get_options();
+     $update_only_changed = ! empty( $options['import_update_only_changed'] );
+     $sku = $fincon_item['ItemNo'] ?? '';
+     $fincon_change_date = $fincon_item['ChangeDate']; // Format CCYYMMDD
+     $fincon_change_time = $fincon_item['ChangeTime']; // Format HH:MM:SS
+     
+     $fincon_timestamp_str = substr($fincon_change_date, 0, 4) . '-' . substr($fincon_change_date, 4, 2) . '-' . substr($fincon_change_date, 6, 2);
+     $fincon_timestamp_str .= ' ' . substr($fincon_change_time, 0, 8);
+     $fincon_timestamp = (int) strtotime( $fincon_timestamp_str );
+ 
+     $product_id = wc_get_product_id_by_sku( $sku );
+     
+     $status = self::PROD_STATUS_CREATE;
+             
+     if ( $product_id ) :
+         $product = wc_get_product( $product_id );
+         $status = self::PROD_STATUS_UPDATE;
+         
+         if ( ! $product )
+           throw new \Exception( "Could not load WC product for ID: {$product_id}" );
+         
+         // Check if update is needed based on timestamps
+         if ( $update_only_changed ) :
+           $last_sync_timestamp = (int) $product->get_meta( self::FINCON_PRODUCT_CHANGED_META_KEY, true );
+           
+           // If last_sync_timestamp is more recent than fincon_timestamp, skip the update
+           if ( $last_sync_timestamp > $fincon_timestamp ) :
+             LOGGER::debug('last_sync_timestamp: ' . $last_sync_timestamp);
+             LOGGER::debug('fincon_timestamp: ' . $fincon_timestamp);
+             LOGGER::debug( 'Skipping update - last_sync_timestamp is more recent than fincon_timestamp' );
+             $status = self::PROD_STATUS_SKIP;
+           endif;
+             
+         endif;
+         
+     else :
+         $product = new \WC_Product_Simple();
+         $product->set_sku( $sku );
+         $product->set_status( 'draft' );
+         //Only update product name from fincon the first time it is created
+         $product->set_name( $fincon_item['Description'] );
+     endif;
+ 
+     // Stock levels should ALWAYS be updated, regardless of skip status
+     // Pass false for save_product since we save at the end
+     self::update_product_stock( $product, $fincon_item, false );
+ 
+     // Only update product details if not skipping
+     if ( $status !== self::PROD_STATUS_SKIP ) :
+       self::update_product_price( $product, $fincon_item );
       
-      $product->set_weight( $fincon_item['Weight'] ?? '' );
-      $product->set_length( $fincon_item['BoxLength'] ?? '' );
-      $product->set_width( $fincon_item['BoxWidth'] ?? '' );
-      $product->set_height( $fincon_item['BoxHeight'] ?? '' );
-    
-      $product->update_meta_data( self::FINCON_PRODUCT_CHANGED_META_KEY, $fincon_timestamp );
-      foreach (self::PRODUCT_META_FINCON_DATA as $key => $label) 
-        $product->update_meta_data( $key, $fincon_item[$key] ?? '' );
-
-       $profromdate = $product->get_meta('ProFromDate');
-
-      if ( !empty($profromdate) ) 
-        self::update_product_promo_price( $product );
-
-    endif;
-
-    // Always update last sync datetime to track when we last checked this product
-    $current_timestamp = time();
-    $product->update_meta_data( self::LAST_SYNC_DATETIME_META_KEY, $current_timestamp );
-    $product->save_meta_data();
-
-    try {
-      $product->save();
-    } catch ( \WC_Data_Exception $e ) {
-      error_log( 'WooCommerce data error: ' . $e->getMessage() );
-      Logger::error( 'WooCommerce data error: ' . $e->getMessage() );
-    } catch ( \Exception $e ) {
-      error_log( 'General error: ' . $e->getMessage() );
-      Logger::error( 'General error: ' . $e->getMessage() );
-    }
-    
-    Logger::debug(sprintf('ItemNo: %s, Product ID: %s, Status: %s', $fincon_item['ItemNo'], $product_id, $status));
-    
-    return $status;
-  }
+       //Don't update product title from Fincon if the product was already created previously
+       if ( $status = self::PROD_STATUS_CREATE )
+ 
+       $product->set_manage_stock( true );
+       
+       $product->set_weight( $fincon_item['Weight'] ?? '' );
+       $product->set_length( $fincon_item['BoxLength'] ?? '' );
+       $product->set_width( $fincon_item['BoxWidth'] ?? '' );
+       $product->set_height( $fincon_item['BoxHeight'] ?? '' );
+     
+       $product->update_meta_data( self::FINCON_PRODUCT_CHANGED_META_KEY, $fincon_timestamp );
+       foreach (self::PRODUCT_META_FINCON_DATA as $key => $label)
+         $product->update_meta_data( $key, $fincon_item[$key] ?? '' );
+ 
+        $profromdate = $product->get_meta('ProFromDate');
+ 
+       if ( !empty($profromdate) )
+         self::update_product_promo_price( $product );
+ 
+     endif;
+ 
+     // Always update last sync datetime to track when we last checked this product
+     $current_timestamp = time();
+     $product->update_meta_data( self::LAST_SYNC_DATETIME_META_KEY, $current_timestamp );
+     $product->save_meta_data();
+ 
+     try {
+       $product->save();
+       // Get the final product ID (for newly created products)
+       $final_product_id = $product->get_id();
+       if ( ! $product_id && $final_product_id ) {
+         $product_id = $final_product_id;
+       }
+     } catch ( \WC_Data_Exception $e ) {
+       error_log( 'WooCommerce data error: ' . $e->getMessage() );
+       Logger::error( 'WooCommerce data error: ' . $e->getMessage() );
+     } catch ( \Exception $e ) {
+       error_log( 'General error: ' . $e->getMessage() );
+       Logger::error( 'General error: ' . $e->getMessage() );
+     }
+     
+     Logger::debug(sprintf('ItemNo: %s, Product ID: %s, Status: %s', $fincon_item['ItemNo'], $product_id, $status));
+     
+     return [
+       'status' => $status,
+       'product_id' => $product_id,
+       'sku' => $sku,
+     ];
+   }
 
   /**
    * Get comma-separated string of location codes

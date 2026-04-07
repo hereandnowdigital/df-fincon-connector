@@ -1,46 +1,26 @@
 <?php
-/**
- * Fincon Service Class
- * 
- * Handles persistent plugin options, including reading and writing Fincon API credentials,
- * and managing the critical Fincon ConnectID session state.
- *
- * @author  Elizabeth Meyer <elizabeth@hereandnowdigital.co.za>
- * @package df-fincon-connector
- * Text Domain: df-fincon
- * 
- */
 
 namespace DF_FINCON;
-use \WP_Error;
 
-// Exit if accessed directly.
-if ( ! defined( 'ABSPATH' ) )
-  exit;
+use DF_FINCON\FinconApi;
+use DF_FINCON\ProductSync;
+use DF_FINCON\CustomerSync;
+use DF_FINCON\Logger;
 
+/**
+ * Service layer for Fincon operations.
+ * Provides high-level methods for importing products and customers.
+ */
 class FinconService {
 
-  /**
-   * 
-   * @var FinconApi
-   */
   private static ?FinconApi $api = null;
 
-
   /**
-   * Array of results, to collate batch results
-   * @var array
+   * Bootstrap the API instance with current settings.
    */
-  private static array $results = [];
-
-
-  public function __construct() {
-    self::$api = new FinconApi(['log_enabled' => false] );
-  }
-
   private static function bootstrap_api(): void {
-    if ( self::$api === null ):
-      self::$api = new FinconApi( [ 'log_enabled' => false ] );
+    if ( ! isset( self::$api ) ) :
+      self::$api = new FinconApi();
       $options = ProductSync::get_options();
       self::$api->batch_size = isset( $options['import_batch_size'] ) ? (int) $options['import_batch_size'] : 100;
     endif;
@@ -110,14 +90,29 @@ class FinconService {
     endif;
     
     $stock_items = $response['Stock'] ?? [];
-    $batch_result = ProductSync::process_import_products( $stock_items );
+    
+    // Calculate how many items to actually process based on remaining count
+    $items_to_process = $stock_items;
+    $remaining_count = 0;
+    
+    if ( $count > 0 ) :
+      $remaining_count = $count - $progress['total_processed'];
+      if ( $remaining_count > 0 && count( $stock_items ) > $remaining_count ) :
+        // Limit to only the number of items we need to reach the target count
+        $items_to_process = array_slice( $stock_items, 0, $remaining_count );
+        Logger::info( sprintf( 'Limiting batch processing: fetched %d items, processing only %d to reach target count %d', count( $stock_items ), $remaining_count, $count ) );
+      endif;
+    endif;
+    
+    $batch_result = ProductSync::process_import_products( $items_to_process );
     
     // Get API response metadata
     $api_count = isset( $response['Count'] ) ? (int) $response['Count'] : count( $stock_items );
     $api_rec_no = isset( $response['RecNo'] ) ? (int) $response['RecNo'] : 0;
     
-    // Update progress
-    ProductSync::update_manual_import_progress( $api_rec_no, $api_count );
+    // Update progress with the actual number processed (not fetched)
+    $actual_processed = count( $items_to_process );
+    ProductSync::update_manual_import_progress( $api_rec_no, $actual_processed );
     
     // Check if we should continue
     $has_more = false;
@@ -144,6 +139,18 @@ class FinconService {
     $batch_result['progress'] = ProductSync::get_manual_import_progress();
     $batch_result['api_count'] = $api_count;
     $batch_result['api_rec_no'] = $api_rec_no;
+    $batch_result['requested_count'] = $count;
+    $batch_result['actual_processed'] = $actual_processed;
+    
+    // Add raw response summary for JavaScript display
+    $batch_result['raw_response_summary'] = [
+      'Count' => $api_count,
+      'RecNo' => $api_rec_no,
+      'skipped_count' => $batch_result['skipped_count'] ?? 0,
+      'total_fetched' => $batch_result['total_fetched'] ?? 0,
+      'updated_count' => $batch_result['updated_count'] ?? 0,
+      'actual_processed' => $actual_processed,
+    ];
     
     return $batch_result;
   }
@@ -190,66 +197,59 @@ class FinconService {
     if ( is_wp_error( $response ) )
       return $response;
 
-    $customers = $response['Accounts'] ?? $response['result'] ?? [];
-    if ( empty( $customers ) && isset( $response['Accounts'] ) )
-      $customers = $response['Accounts'];
-
-    $summary = self::process_customers( (array) $customers, $update_only_changed, $create_if_missing );
-    $summary['api_count'] = isset( $response['Count'] ) ? (int) $response['Count'] : count( $customers );
-    $summary['api_rec_no'] = isset( $response['RecNo'] ) ? (int) $response['RecNo'] : ( $offset + $summary['api_count'] );
-    $summary['requested_count'] = $count;
+    $customers = $response['Accounts'] ?? [];
+    $summary = self::process_customers( $customers, $update_only_changed, $create_if_missing );
+    $summary['api_count'] = $response['Count'] ?? count( $customers );
+    $summary['api_rec_no'] = $response['RecNo'] ?? $offset + count( $customers );
+    $summary['batch_complete'] = ! self::$api->has_more();
 
     return $summary;
   }
 
   /**
-   * Process customer payloads.
+   * Process customers from Fincon API response.
    *
-   * @param array $customers Array of customer data from Fincon API.
-   * @param bool $update_only_changed Whether to skip unchanged customers.
-   * @param bool $create_if_missing Whether to create new customers if not found.
-   * @return array Import summary.
+   * @param array $customers
+   * @param bool $update_only_changed
+   * @param bool $create_if_missing
+   * @return array
    */
   public static function process_customers( array $customers, bool $update_only_changed = false, bool $create_if_missing = true ): array {
-    $imported = 0;
-    $created = 0;
-    $updated = 0;
-    $skipped = 0;
+    $created_count = 0;
+    $updated_count = 0;
+    $skipped_count = 0;
     $errors = [];
-    Logger::debug('api_customers:', $customers);
-    foreach ( $customers as $customer ) {
+
+    foreach ( $customers as $customer ) :
       try {
-        $result = CustomerSync::create_or_update_customer( $customer, $update_only_changed, $create_if_missing );
-        $imported++;
-        if ( $result['status'] === CustomerSync::STATUS_CREATE )
-          $created++;
-        elseif ( $result['status'] === CustomerSync::STATUS_UPDATE )
-          $updated++;
-        else
-          $skipped++;
-      } catch ( \Throwable $exception ) {
-        $skipped++;
-        $errors[] = sprintf(
-          'Failed to import customer %s: %s',
-          $customer['AccNo'] ?? 'N/A',
-          $exception->getMessage()
-        );
+        $result = CustomerSync::create_or_update_wc_customer( $customer, $update_only_changed, $create_if_missing );
+        if ( $result === CustomerSync::CUSTOMER_STATUS_CREATE )
+          $created_count++;
+        elseif ( $result === CustomerSync::CUSTOMER_STATUS_UPDATE )
+          $updated_count++;
+        elseif ( $result === CustomerSync::CUSTOMER_STATUS_SKIP )
+          $skipped_count++;
+      } catch ( \Exception $e ) {
+        $skipped_count++;
+        $errors[] = sprintf( 'Failed to import customer %s: %s', $customer['AccNo'] ?? 'N/A', $e->getMessage() );
       }
-    }
+    endforeach;
 
-    if ( $errors )
-      Logger::error( 'Customer import finished with errors.', $errors );
-
-    return [
-      'total_fetched'  => count( $customers ),
-      'imported_count' => $imported,
-      'created_count'  => $created,
-      'updated_count'  => $updated,
-      'skipped_count'  => $skipped,
-      'errors'         => $errors,
+    $summary = [
+      'total_fetched' => count( $customers ),
+      'imported_count' => $created_count + $updated_count,
+      'created_count' => $created_count,
+      'updated_count' => $updated_count,
+      'skipped_count' => $skipped_count,
+      'errors' => $errors,
     ];
-  }
 
-  
+    if ( ! empty( $errors ) )
+      Logger::error( 'Customer import finished with errors.', $summary );
+    else
+      Logger::info( 'Customer import successful.', $summary );
+
+    return $summary;
+  }
 
 }

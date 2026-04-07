@@ -36,15 +36,7 @@
             <?php esc_html_e( 'Import Customers', 'df-fincon' ); ?>
           </a>
         </div>
-        
-        <div class="df-fincon-card">
-          <h3><?php esc_html_e( 'Cron Log', 'df-fincon' ); ?></h3>
-          <p><?php esc_html_e( 'View scheduled sync logs and status', 'df-fincon' ); ?></p>
-          <a href="<?php echo esc_url( admin_url( 'admin.php?page=df-fincon-cron-log' ) ); ?>" class="button button-primary">
-            <?php esc_html_e( 'View Logs', 'df-fincon' ); ?>
-          </a>
-        </div>
-        
+               
         <div class="df-fincon-card">
           <h3><?php esc_html_e( 'Stock Locations', 'df-fincon' ); ?></h3>
           <p><?php esc_html_e( 'Manage stock locations and defaults', 'df-fincon' ); ?></p>
@@ -53,32 +45,16 @@
           </a>
         </div>
         
+        <div class="df-fincon-card">
+          <h3><?php esc_html_e( 'Cron Log', 'df-fincon' ); ?></h3>
+          <p><?php esc_html_e( 'View scheduled sync logs and status', 'df-fincon' ); ?></p>
+          <a href="<?php echo esc_url( admin_url( 'admin.php?page=df-fincon-cron-log' ) ); ?>" class="button button-primary">
+            <?php esc_html_e( 'View Logs', 'df-fincon' ); ?>
+          </a>
+        </div>
+
       </div>
     </div>
     
   </div>
 </div>
-
-<style>
-.df-fincon-card-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 20px;
-  margin: 20px 0;
-}
-.df-fincon-card {
-  background: #fff;
-  border: 1px solid #ccd0d4;
-  border-radius: 4px;
-  padding: 20px;
-  box-shadow: 0 1px 1px rgba(0,0,0,.04);
-}
-.df-fincon-card h3 {
-  margin-top: 0;
-  margin-bottom: 10px;
-}
-.df-fincon-card p {
-  color: #646970;
-  margin-bottom: 15px;
-}
-</style>

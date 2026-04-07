@@ -60,6 +60,7 @@ class Admin {
     add_action( 'admin_init', [ __CLASS__,'register_settings_orders' ] );
     add_action( 'wp_ajax_df_fincon_test_connection', [ __CLASS__,'ajax_test_connection' ] );
     add_action( 'wp_ajax_df_fincon_manual_import_products', [ __CLASS__,'ajax_manual_import_products' ] );
+    add_action( 'wp_ajax_df_fincon_reset_import_progress', [ __CLASS__,'ajax_reset_import_progress' ] );
     add_action( 'wp_ajax_df_fincon_manual_import_customers', [ __CLASS__,'ajax_manual_import_customers' ] );
     add_action( 'wp_ajax_df_fincon_manual_sync_order', [ __CLASS__,'ajax_manual_sync_order' ] );
     add_action( 'wp_ajax_df_fincon_sync_user_by_accno', [ __CLASS__,'ajax_sync_user_by_accno' ] );
@@ -70,7 +71,8 @@ class Admin {
     add_action( 'wp_ajax_df_fincon_stock_location_delete', [ __CLASS__,'ajax_stock_location_delete' ] );
     add_action( 'wp_ajax_df_fincon_stock_location_set_default', [ __CLASS__,'ajax_stock_location_set_default' ] );
     add_action( 'wp_ajax_df_fincon_stock_location_toggle_active', [ __CLASS__,'ajax_stock_location_toggle_active' ] );
-    add_action( 'admin_enqueue_scripts', [ __CLASS__,'enqueue_scripts' ] );
+    add_action( 'admin_enqueue_scripts', [ __CLASS__,'enqueue_scripts' ], 10 );
+    add_action( 'admin_enqueue_scripts', [ __CLASS__,'enqueue_styles' ], 10 );
   }
 
   public static function register_menu(): void {
@@ -120,16 +122,6 @@ class Admin {
       [ __CLASS__,'render_customer_import_page' ]
     );
 
-
-    add_submenu_page(
-      'df-fincon-settings',
-      __( 'Cron Log', 'df-fincon' ),
-      __( 'Cron Log', 'df-fincon' ),
-      'manage_woocommerce',
-      'df-fincon-cron-log',
-      [ __CLASS__,'render_cron_log_page' ]
-    );
-
     add_submenu_page(
       'df-fincon-settings',
       __( 'Stock Locations', 'df-fincon' ),
@@ -137,6 +129,24 @@ class Admin {
       'manage_woocommerce',
       'df-fincon-stock-locations',
       [ __CLASS__,'render_stock_locations_page' ]
+    );
+
+    add_submenu_page(
+      'df-fincon-settings',
+      __( 'Cron Log Invoices', 'df-fincon' ),
+      __( 'Cron Log Invoices', 'df-fincon' ),
+      'manage_woocommerce',
+      'df-fincon-cron-log',
+      [ __CLASS__,'render_cron_log_page' ]
+    );
+
+    add_submenu_page(
+      'df-fincon-settings',
+      __( 'Cron Log Products', 'df-fincon' ),
+      __( 'Cron Log Products', 'df-fincon' ),
+      'manage_woocommerce',
+      'df-fincon-cron-log-products',
+      [ __CLASS__,'render_cron_log_products_page' ]
     );
 
   }
@@ -183,6 +193,7 @@ class Admin {
         'import_batch_size' => __( 'Batch Size', 'df-fincon' ),
         'import_update_only_changed' => __( 'Update only changed products', 'df-fincon' ),
         'import_web_only' => __( 'Web Only', 'df-fincon' ),
+        'product_cron_log_enabled' => __( 'Enable product cron log', 'df-fincon' ),
     ];
 
     foreach ( $import_fields as $id => $label )
@@ -336,6 +347,7 @@ class Admin {
       'password' => 'password',
       'import_update_only_changed' => 'checkbox',
       'import_web_only' => 'checkbox',
+      'product_cron_log_enabled' => 'checkbox',
       'customer_import_only_changed' => 'checkbox',
       'customer_weblist_only' => 'checkbox',
       'order_sync_enabled' => 'checkbox',
@@ -537,7 +549,8 @@ class Admin {
     $sanitized['import_batch_size'] = isset( $input['import_batch_size'] ) ? absint( $input['import_batch_size'] ) : 100;
     $sanitized['import_update_only_changed'] = isset( $input['import_update_only_changed'] ) ? 1 : 0;
     $sanitized['import_web_only'] = isset( $input['import_web_only'] ) ? 1 : 0;
-    
+    $sanitized['product_cron_log_enabled'] = isset( $input['product_cron_log_enabled'] ) ? 1 : 0;
+
     // Reinitialize cron schedule if enabled
     if ( $sanitized['sync_schedule_enabled'] ) {
       Cron::create()->add_cron_schedule();
@@ -574,7 +587,7 @@ class Admin {
     $sanitized['customer_sync_schedule_time'] = isset( $input['customer_sync_schedule_time'] ) ? sanitize_text_field( $input['customer_sync_schedule_time'] ) : '23:00';
     
     $sanitized['customer_sync_schedule_day'] = isset( $input['customer_sync_schedule_day'] ) ? absint( $input['customer_sync_schedule_day'] ) : 1;
-    
+
     // Reinitialize cron schedule if enabled
     $cron = Cron::create();
     if ( $sanitized['customer_sync_schedule_enabled'] ) {
@@ -679,6 +692,26 @@ class Admin {
     ] );
   }
 
+  public static function enqueue_styles( string $hook ): void {
+    // Only enqueue on our plugin pages 
+    $is_plugin_page = strpos( $hook, 'df-fincon' ) !== false;
+    
+    if ( ! $is_plugin_page )
+      return;
+
+    // Use file modification time for cache busting
+    $admin_css_path = DF_FINCON_PLUGIN_DIR . 'assets/css/admin.css';
+    $version = file_exists( $admin_css_path ) ? filemtime( $admin_css_path ) : DF_FINCON_VERSION;
+    
+    wp_enqueue_style(
+      'df-fincon-admin',
+      DF_FINCON_PLUGIN_URL . 'assets/css/admin.css',
+      [ ],
+      $version
+    );
+    
+  }
+
   public static function render_settings_page(): void {
     require_once self::TEMPLATE_PATH . 'dashboard.php';
   }
@@ -714,6 +747,85 @@ class Admin {
     
     // Pass logs to template
     require_once self::TEMPLATE_PATH . 'cron-log.php';
+  }
+
+  public static function render_cron_log_products_page(): void {
+    // Handle file deletion action
+    if ( isset( $_GET['action'] ) && $_GET['action'] === 'delete_log' && isset( $_GET['file'] ) && isset( $_GET['_wpnonce'] ) ) {
+      if ( wp_verify_nonce( $_GET['_wpnonce'], 'delete_product_cron_log' ) ) {
+        $cron_logger = ProductCronLogger::create();
+        $file_name = sanitize_text_field( $_GET['file'] );
+        $deleted = $cron_logger->delete_log_file( $file_name );
+        
+        if ( $deleted ) {
+          add_settings_error(
+            'df_fincon_cron_log_products',
+            'log_deleted',
+            sprintf( __( 'Log file "%s" deleted successfully.', 'df-fincon' ), $file_name ),
+            'success'
+          );
+        } else {
+          add_settings_error(
+            'df_fincon_cron_log_products',
+            'log_delete_failed',
+            sprintf( __( 'Failed to delete log file "%s".', 'df-fincon' ), $file_name ),
+            'error'
+          );
+        }
+        
+        wp_safe_redirect( remove_query_arg( [ 'action', 'file', '_wpnonce' ] ) );
+        exit;
+      }
+    }
+    
+    // Handle clear all logs action
+    if ( isset( $_GET['action'] ) && $_GET['action'] === 'clear_all_logs' && isset( $_GET['_wpnonce'] ) ) {
+      if ( wp_verify_nonce( $_GET['_wpnonce'], 'clear_all_product_cron_logs' ) ) {
+        $cron_logger = ProductCronLogger::create();
+        $results = $cron_logger->delete_all_log_files();
+        
+        if ( ! empty( $results['deleted'] ) ) {
+          add_settings_error(
+            'df_fincon_cron_log_products',
+            'logs_cleared',
+            sprintf( __( 'Deleted %d log file(s).', 'df-fincon' ), count( $results['deleted'] ) ),
+            'success'
+          );
+        }
+        
+        if ( ! empty( $results['errors'] ) ) {
+          add_settings_error(
+            'df_fincon_cron_log_products',
+            'logs_clear_errors',
+            sprintf( __( 'Failed to delete %d log file(s).', 'df-fincon' ), count( $results['errors'] ) ),
+            'error'
+          );
+        }
+        
+        wp_safe_redirect( remove_query_arg( [ 'action', '_wpnonce' ] ) );
+        exit;
+      }
+    }
+    
+    // Get log files
+    $cron_logger = ProductCronLogger::create();
+    $log_files = $cron_logger->get_log_files();
+    
+    // Get current log file content if viewing
+    $current_log_content = '';
+    $current_log_file = '';
+    
+    if ( isset( $_GET['view'] ) && ! empty( $_GET['view'] ) ) {
+      $file_name = sanitize_text_field( $_GET['view'] );
+      $current_log_content = $cron_logger->read_log_file( $file_name );
+      $current_log_file = $file_name;
+    }
+    
+    // Check if logging is enabled
+    $logging_enabled = $cron_logger->is_enabled();
+    
+    // Pass data to template
+    require_once self::TEMPLATE_PATH . 'cron-log-products.php';
   }
 
   public static function render_stock_locations_page(): void {
@@ -810,7 +922,20 @@ class Admin {
     if ( ! current_user_can( 'manage_woocommerce' ) )
       wp_die( 'Unauthorized', 403 );
     
-    $result = FinconService::import_products();
+    // Determine if single product import or batch import
+    $product_item_code = sanitize_text_field( $_POST['product_item_code'] ?? '' );
+    $count = absint( $_POST['count'] ?? 0 );
+    $resume = ! empty( $_POST['resume'] );
+    
+    if ( ! empty( $product_item_code ) ) {
+      // Single product import
+      $result = FinconService::import_product( $product_item_code );
+      $message = __( 'Single product import completed.', 'df-fincon' );
+    } else {
+      // Batch import
+      $result = FinconService::import_products( $count, $resume );
+      $message = sprintf( __( 'Product import completed. %d products processed.', 'df-fincon' ), $result['total_processed'] ?? 0 );
+    }
     
     if ( is_wp_error( $result ) ) {
       wp_send_json_error( [
@@ -819,10 +944,23 @@ class Admin {
       ] );
     } else {
       wp_send_json_success( [
-        'message' => sprintf( __( 'Product import completed. %d products processed.', 'df-fincon' ), $result['total_processed'] ?? 0 ),
+        'message' => $message,
         'data' => $result,
       ] );
     }
+  }
+
+  public static function ajax_reset_import_progress(): void {
+    check_ajax_referer( self::IMPORT_NONCE, 'nonce' );
+    
+    if ( ! current_user_can( 'manage_woocommerce' ) )
+      wp_die( 'Unauthorized', 403 );
+    
+    ProductSync::reset_manual_import_progress();
+    
+    wp_send_json_success( [
+      'message' => __( 'Import progress has been reset.', 'df-fincon' ),
+    ] );
   }
 
   public static function ajax_manual_import_customers(): void {

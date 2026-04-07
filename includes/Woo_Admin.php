@@ -49,6 +49,7 @@ class Woo_Admin {
   private const USER_META_ON_HOLD = CustomerSync::META_ON_HOLD;
   private const USER_META_CHANGED_TIMESTAMP = CustomerSync::META_CHANGED_TIMESTAMP;
   private const USER_META_LAST_SYNC_TIMESTAMP = CustomerSync::META_LAST_SYNC_TIMESTAMP;
+  private const USER_META_DBG_DEALER_SUB_ACCOUNT = CustomerSync::META_DBG_DEALER_SUB_ACCOUNT;
   
   /**
    * Price list history meta keys
@@ -402,13 +403,62 @@ echo '<h3>' . __( 'FinCon Data', 'df-fincon' ) . '</h3>';
     if ( ! current_user_can( 'edit_user', $user_id ) )
       return;
 
+    $has_duplicate = false; // Initialize to false
+
+    // Save FINCON account number if provided
     if ( isset( $_POST[ self::USER_META_ACCNO ] ) ) {
-      update_user_meta( $user_id, self::USER_META_ACCNO, sanitize_text_field( wp_unslash( $_POST[ self::USER_META_ACCNO ] ) ) );
+      $accno = sanitize_text_field( wp_unslash( $_POST[ self::USER_META_ACCNO ] ) );
+      // Store trimmed and uppercased version for consistency
+      $trimmed_uppercased_accno = trim( strtoupper( $accno ) );
+      update_user_meta( $user_id, self::USER_META_ACCNO, $trimmed_uppercased_accno );
+      
+      // Check if this (trimmed, uppercased) account number already exists for another user
+      if ( ! empty( $trimmed_uppercased_accno ) ) {
+        // Find other users with the same account number
+        // We need to compare trimmed/uppercased values, so we'll query all and check
+        $args = [
+          'meta_key'     => self::USER_META_ACCNO,
+          'meta_compare' => 'EXISTS', // Get users with any account number
+          'exclude'      => [ $user_id ], // Exclude current user
+          'fields'       => 'ID',
+        ];
+        
+        $all_users_with_accno = get_users( $args );
+        
+        foreach ( $all_users_with_accno as $other_user_id ) {
+          $other_accno = get_user_meta( $other_user_id, self::USER_META_ACCNO, true );
+          $other_trimmed_uppercased = trim( strtoupper( $other_accno ) );
+          
+          if ( $other_trimmed_uppercased === $trimmed_uppercased_accno ) {
+            $has_duplicate = true;
+            break;
+          }
+        }
+        
+        // If another user with the same account number exists, automatically enable sub account
+        if ( $has_duplicate ) {
+          // Force enable DBG Dealer sub account for this user
+          update_user_meta( $user_id, self::USER_META_DBG_DEALER_SUB_ACCOUNT, 1 );
+          // Don't return here - still save other fields
+        }
+      }
     }
 
     if ( isset( $_POST[ self::USER_META_PRICE_STRUCTURE ] ) ) {
       update_user_meta( $user_id, self::USER_META_PRICE_STRUCTURE, (int) $_POST[ self::USER_META_PRICE_STRUCTURE ] );
     }
+
+    // Save DBG Dealer sub account checkbox
+    // Note: If duplicate account number was found above, this will be overwritten to 1
+    // This ensures the checkbox is checked even if admin tried to uncheck it
+    $dbg_dealer_sub_account = isset( $_POST[ self::USER_META_DBG_DEALER_SUB_ACCOUNT ] ) ? 1 : 0;
+    
+    // If duplicate account number was found, force enable regardless of checkbox state
+    if ( $has_duplicate ) {
+      $dbg_dealer_sub_account = 1;
+    }
+    
+    update_user_meta( $user_id, self::USER_META_DBG_DEALER_SUB_ACCOUNT, $dbg_dealer_sub_account );
 
   }
 
@@ -603,6 +653,11 @@ echo '<h3>' . __( 'FinCon Data', 'df-fincon' ) . '</h3>';
           'description' => __( 'Determines which FinCon price tier to use. Price List 1 = Retail, 2-6 = Dealer.', 'df-fincon' ),
           'type'        => 'select',
           'options'     => $price_list_options,
+        ],
+        self::USER_META_DBG_DEALER_SUB_ACCOUNT => [
+          'label'       => __( 'DBG Dealer sub account', 'df-fincon' ),
+          'description' => __( 'If enabled, the user cannot change their billing or shipping address on checkout or on their My Account screen. Fields will be readonly and disabled.', 'df-fincon' ),
+          'type'        => 'checkbox',
         ],
       ],
     ];
