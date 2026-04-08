@@ -966,6 +966,9 @@ add_action( 'woocommerce_after_order_details', [ __CLASS__, 'display_location_in
     $dealer_price = self::get_price_for_price_list( $product, $price_list );
     $dealer_promo_price = self::get_promotional_price_for_price_list( $product, $price_list );
     $sell_prices = array_filter([$regular_price, $dealer_price, $dealer_promo_price], 'is_numeric');
+    if ( empty( $sell_prices ) ) 
+      return 0.0;
+
     return min($sell_prices);
   }
 
