@@ -311,40 +311,6 @@ class PdfStorage {
   }
 
   /**
-   * Clean up old PDF files (optional maintenance)
-   *
-   * @param int $days_old Delete files older than this many days
-   * @return array Results of cleanup operation
-   * @since 1.0.0
-   */
-  public function cleanup_old_files( int $days_old = 30 ): array {
-    $storage_dir = $this->get_storage_dir();
-    $cutoff_time = time() - ( $days_old * DAY_IN_SECONDS );
-    $results = [
-      'deleted' => 0,
-      'failed' => 0,
-      'total' => 0,
-    ];
-    
-    $files = glob( $storage_dir . '*.pdf' );
-    
-    foreach ( $files as $file ) {
-      $results['total']++;
-      
-      if ( filemtime( $file ) < $cutoff_time ) {
-        if ( unlink( $file ) )
-          $results['deleted']++;
-        else
-          $results['failed']++;
-      }
-    }
-    
-    Logger::info( 'PDF cleanup completed', $results );
-    
-    return $results;
-  }
-
-  /**
    * Fetch and save PDF from Fincon API
    *
    * @param int $order_id WooCommerce order ID
