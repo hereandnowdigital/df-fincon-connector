@@ -150,7 +150,11 @@ class FinconApi {
    * @return string The ConnectID or an empty string if expired or not set.
    */
   public function get_connect_id(): string | WP_Error  {
-    return (string) (self::$connect_id ?? $this->create_connect_id() );
+    $connect_id = self::$connect_id ?? $this->create_connect_id();
+    if ( is_wp_error( $connect_id ) ) 
+      return $connect_id;
+   
+    return (string) $connect_id;
   }
 
 
