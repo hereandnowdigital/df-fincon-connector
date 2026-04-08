@@ -479,7 +479,7 @@ class ProductSync {
        self::update_product_price( $product, $fincon_item );
       
        //Don't update product title from Fincon if the product was already created previously
-       if ( $status = self::PROD_STATUS_CREATE )
+       if ( $status == self::PROD_STATUS_CREATE )
  
        $product->set_manage_stock( true );
        
