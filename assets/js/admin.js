@@ -1,13 +1,13 @@
 jQuery(document).ready(function($) {
   // Tab switching
   function switchTab(target) {
-    $('.df-fincon-tab').removeClass('active');
-    $('.df-fincon-tab-content').removeClass('active');
+    $('.nav-tab ').removeClass('active');
+    $('.tab-content').hide();
     $(target).addClass('active');
-    $('#' + $(target).data('target')).addClass('active');
+    $('#tab-' + $(target).data('tab')).show();
   }
 
-  $('.df-fincon-tab').on('click', function(e) {
+  $('.nav-tab').on('click', function(e) {
     e.preventDefault();
     switchTab(this);
   });
@@ -15,36 +15,15 @@ jQuery(document).ready(function($) {
   // API Settings Tab
   (function() {
     const $apiFields = $('#df_fincon_api_settings');
-    const $testButton = $('#df-fincon-test-connection-btn');
+    const $testButton = $('#df-fincon-test-connection');
 
-    function isApiFieldsPopulated() {
-      const required = ['server_url', 'server_port', 'username', 'password', 'data_id'];
-      let filled = 0;
-      required.forEach(function(field) {
-        var value = $apiFields.find('[name="' + field + '"]').val();
-        if (value && value.trim() !== '')
-          filled++;
-      });
-      return filled === required.length;
-    }
-
-    function checkConnectionButtonState() {
-      $testButton.prop('disabled', !isApiFieldsPopulated());
-    }
-
-    // Initial state
-    checkConnectionButtonState();
-
-    // Monitor input changes
-    $apiFields.find('input').on('input', checkConnectionButtonState);
 
     // Test connection handler
     $testButton.on('click', function(e) {
       e.preventDefault();
       const $button = $(this);
       const originalText = $button.text();
-      const $feedback = $('#df-fincon-test-feedback');
-
+      const $feedback = $('#df-fincon-test-status');
       $feedback.removeClass('success error').html('<p>' + DF_FINCON_ADMIN.messages.testing + '...</p>');
       $button.prop('disabled', true).text(DF_FINCON_ADMIN.messages.testing);
 
