@@ -714,6 +714,7 @@ class LocationManager {
       "SELECT DISTINCT post_id
        FROM {$wpdb->postmeta}
        WHERE meta_key IN (%s, %s)
+       AND post_type IN ('product', 'product_variation') 
        AND post_id IN (SELECT ID FROM {$wpdb->posts} WHERE post_type = 'product')",
       $old_meta_keys[0],
       $old_meta_keys[1]
