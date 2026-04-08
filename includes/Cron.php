@@ -50,14 +50,6 @@ class Cron {
    * This ensures cron jobs are scheduled even if settings were never saved after enabling
    */
   public static function init_cron_schedule(): void {
-     Logger::debug( 'init_cron_schedule() fired', [
-        'product_next'     => wp_next_scheduled( self::HOOK ),
-        'customer_next'    => wp_next_scheduled( self::CUSTOMER_HOOK ),
-        'invoice_next'     => wp_next_scheduled( self::INVOICE_CHECK_HOOK ),
-        'product_options'  => ProductSync::get_options(),
-        'customer_options' => CustomerSync::get_options(),
-        'invoice_options'  => InvoiceChecker::get_options(),
-    ] );
     
     // Product sync - only schedule if not already scheduled
     if ( ! wp_next_scheduled( self::HOOK ) ) {
@@ -90,12 +82,6 @@ class Cron {
     add_action( self::HOOK, [ __CLASS__, 'product_scheduled_sync' ] );
     add_action( self::CUSTOMER_HOOK, [ __CLASS__, 'customer_scheduled_sync' ] );
     add_action( self::INVOICE_CHECK_HOOK, [ __CLASS__, 'invoice_check_scheduled' ] );
-      Logger::debug( 'register_cron_hook() fired', [
-        'product_has_action'  => has_action( self::HOOK ),
-        'invoice_has_action'  => has_action( self::INVOICE_CHECK_HOOK ),
-        'doing_cron'          => defined( 'DOING_CRON' ) && DOING_CRON,
-        'current_filter'      => current_filter(),
-    ] );
   }
 
 
