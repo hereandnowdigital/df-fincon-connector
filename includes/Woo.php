@@ -79,7 +79,8 @@ class Woo {
     
     // My Account addresses page modifications for DBG Dealer sub accounts
     add_action( 'woocommerce_account_content', [ __CLASS__, 'maybe_display_dbg_dealer_address_message' ] );
-    add_action( 'woocommerce_after_edit_address_form_(load_address)', [ __CLASS__, 'maybe_disable_save_address_button' ] );
+    add_action( 'woocommerce_after_edit_address_form_billing', [ __CLASS__, 'maybe_disable_save_address_button' ] );
+    add_action( 'woocommerce_after_edit_address_form_shipping', [ __CLASS__, 'maybe_disable_save_address_button' ] );
     add_filter( 'woocommerce_my_account_my_address_description', [ __CLASS__, 'modify_my_address_description' ], 10, 1 );
     
     // Remove addresses link from My Account navigation for DBG Dealer sub accounts
