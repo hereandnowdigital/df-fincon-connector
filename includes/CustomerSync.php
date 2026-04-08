@@ -287,7 +287,7 @@ class CustomerSync {
     update_user_meta( $user_id, self::META_ACTIVE, $is_active );
 
     // Store on-hold status
-    $is_on_hold = strtoupper( (string) ( $debtor['OnHold'] ?? 'Y' ) ) === 'Y' ? 'Y' : 'Y';
+    $is_on_hold = strtoupper( (string) ( $debtor['OnHold'] ?? 'N' ) ) === 'Y' ? 'Y' : 'N';
     update_user_meta( $user_id, self::META_ON_HOLD, $is_on_hold );
     
     // Store account number
@@ -317,7 +317,10 @@ class CustomerSync {
     update_user_meta( $user_id, 'shipping_country', 'ZA' );
 
     // Phone number
-    $phone = trim( $debtor['TelNo'] ) ?? trim( $debtor['TelNo1'] ) ?? '';
+    $phone = trim( $debtor['TelNo'] ?? '' );
+    if ( empty( $phone ) ) 
+      $phone = trim( $debtor['TelNo1'] ?? '' );
+
     update_user_meta( $user_id, 'billing_phone', $phone );
 
     // Delivery instructions
