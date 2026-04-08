@@ -244,7 +244,6 @@ class FinconApi {
    */
   private function send_request( string $method, string $function_name, array $query_params = [],  array $request_body = [], $skip_connect_id = false): array|\WP_Error {
     $path = self::build_path( $function_name, $query_params, $skip_connect_id );
-    Logger::debug('path: ', $path);
     self::$client->method = $method;
     self::$client->path = $path;
     self::$client->request_body = $request_body;
@@ -355,8 +354,8 @@ class FinconApi {
    * @param array|\WP_Error $response_result The result of the client request.
    */
   private static function log_api_call(  string $function_name, string $method, string $path, string $code, array $request_body, mixed $result ): void {
-    // if ( !self::$log_enabled )
-    //   return;
+    if ( !self::$log_enabled )
+      return;
 
     $log_message = "--- API CALL: {$function_name} ---\n";
 
@@ -418,26 +417,28 @@ class FinconApi {
    */
   public function login( $clear_connect_id = true ): array|\WP_Error {
     $function = 'Login';
-    $method = 'GET';
-    $parameters = [
-        self::$configs['data_id'] ?? '',
-        self::$configs['username'] ?? '',
-        self::$configs['password'] ?? '',
-        '0',
-    ];
     $skip_connect_id = true;
 
-    if ( $clear_connect_id ) 
-      self::clear_connect_id();
+    if ( $clear_connect_id )
+        self::clear_connect_id();
 
-    $result = $this->get_request( $function, $parameters, $skip_connect_id );
+    $body_params = [
+        '_parameters' => [
+            self::$configs['data_id'] ?? '',
+            self::$configs['username'] ?? '',
+            self::$configs['password'] ?? '',
+            false,
+        ]
+    ];
 
-    if ( is_wp_error( $result ) ) 
-      return $result;
-    
-    if ( ! isset( $result['ConnectID'] ) || empty( $result['ConnectID'] ) ) 
-          return new \WP_Error( 'fincon_login_failed', __( 'Login failed: ConnectID was not returned.', 'df-fincon' ) );
-    
+    $result = $this->post_request( $function, [], $body_params, $skip_connect_id );
+
+    if ( is_wp_error( $result ) )
+        return $result;
+
+    if ( ! isset( $result['ConnectID'] ) || empty( $result['ConnectID'] ) )
+        return new \WP_Error( 'fincon_login_failed', __( 'Login failed: ConnectID was not returned.', 'df-fincon' ) );
+
     self::set_connect_id( $result['ConnectID'] );
 
     return $result;
