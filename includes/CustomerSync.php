@@ -287,7 +287,7 @@ class CustomerSync {
     update_user_meta( $user_id, self::META_ACTIVE, $is_active );
 
     // Store on-hold status
-    $is_on_hold = strtoupper( (string) ( $debtor['OnHold'] ?? 'Y' ) ) === 'Y' ? 'Y' : 'N';
+    $is_on_hold = strtoupper( (string) ( $debtor['OnHold'] ?? 'Y' ) ) === 'Y' ? 'Y' : 'Y';
     update_user_meta( $user_id, self::META_ON_HOLD, $is_on_hold );
     
     // Store account number
