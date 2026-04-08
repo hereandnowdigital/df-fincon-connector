@@ -60,6 +60,7 @@ class FinconApi {
    * @const string
    */
   private const CONFIG_DEFAULTS = [
+    'log_enabled' => false,
     'server_url' => '',
     'server_port' => '4090',
     'username' => '',
@@ -104,8 +105,6 @@ class FinconApi {
 
   public function __construct( array $config_override = ['log_enabled' => true] ) {
     self::$configs = self::get_configs();
-
-    // #EM-TODO: Move LOG Enabled to plugin options settings page
     self::$log_enabled = self::$configs['log_enabled'] ?? false;
 
     self::$base_url = self::build_base_url();

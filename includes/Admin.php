@@ -164,6 +164,7 @@ class Admin {
       );
 
       $fields = [
+          'log_enabled' => __( 'Enable API Logging', 'df-fincon' ),
           'server_url' => __( 'Server URL', 'df-fincon' ),
           'server_port' => __( 'Server Port', 'df-fincon' ),
           'username' => __( 'FinCon Username', 'df-fincon' ),
@@ -353,6 +354,7 @@ class Admin {
       'order_sync_enabled' => 'checkbox',
       'order_sync_status_processing' => 'checkbox',
       'order_sync_status_completed' => 'checkbox',
+      'log_enabled' => 'checkbox',
       default => 'text',
     };
     
@@ -520,7 +522,8 @@ class Admin {
     $sanitized['username'] = isset( $input['username'] ) ? sanitize_text_field( $input['username'] ) : '';
     $sanitized['password'] = isset( $input['password'] ) ? sanitize_text_field( $input['password'] ) : '';
     $sanitized['data_id'] = isset( $input['data_id'] ) ? sanitize_text_field( $input['data_id'] ) : '';
-    
+    $sanitized['log_enabled'] = ! empty( $input['log_enabled'] );
+
     return $sanitized;
   }
 
