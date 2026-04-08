@@ -50,9 +50,12 @@ class Plugin {
   }
 
   private function load_dependencies(): void {
+    $woo_available = class_exists( 'WooCommerce' );
+    
+    error_log( '[DF_FINCON] load_dependencies() | WooCommerce available: ' . ( $woo_available ? 'YES' : 'NO' ) . ' | DOING_CRON: ' . ( defined('DOING_CRON') && DOING_CRON ? 'YES' : 'NO' ) );
+    Logger::create( );
 
     if ( class_exists( 'WooCommerce' ) ) :
-      Logger::create( );
       Shortcodes::create();
       Woo::create();
       InvoiceChecker::create();
