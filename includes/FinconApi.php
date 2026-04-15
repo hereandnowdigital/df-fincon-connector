@@ -106,10 +106,18 @@ class FinconApi {
   public function __construct( array $config_override = ['log_enabled' => true] ) {
     self::$configs = self::get_configs();
     self::$log_enabled = self::$configs['log_enabled'] ?? false;
-
     self::$base_url = self::build_base_url();
     self::$connect_id = get_transient( self::CONNECTID_TRANSIENT_KEY );
     self::$client = new Client( self::$log_enabled );
+  }
+
+
+  private static function get_base_url(): string {
+      if ( empty( self::$base_url ) ) {
+        self::$configs  = self::get_configs();
+        self::$base_url = self::build_base_url();
+      }
+      return self::$base_url;
   }
 
   /*
@@ -317,8 +325,15 @@ class FinconApi {
    * @return string The resource path to append to the base URL.
    */
   private function build_path( string $function_name, array $parameters = [], $skip_connect_id = false ): string {
+    if ( empty( self::get_base_url() ) ) {
+        Logger::error( 'build_path() called with empty $base_url — FinconApi may not have been properly instantiated.' );
+        // Rebuild it defensively
+        self::$configs = self::get_configs();
+        self::$base_url = self::build_base_url();
+    }
+
     // Function name must be enclosed in quotes and URL encoded
-    $path =  self::$base_url  . '%22' . $function_name . '%22' . '/';
+    $path =  self::get_base_url()  . '%22' . $function_name . '%22' . '/';
 
     if ( !$skip_connect_id ) :
       if ( empty( self::$connect_id ) )
@@ -331,7 +346,9 @@ class FinconApi {
         $path .= implode( '/', $parameters );
     
     // Trailing slash for consistency
-    return rtrim( $path, '/' ) . '/';
+    $path = rtrim( $path, '/' ) . '/';
+    Logger::info('build_path:', $path);
+    return $path;
   }
 
   private static function build_auth_header(): string {
@@ -414,7 +431,7 @@ class FinconApi {
    * @param string $clear_connect_id The ConnectID to log out.
    * @return array|\WP_Error Returns ConnectID and APIVersion on success, or WP_Error.
    */
-  public function login( $clear_connect_id = true ): array|\WP_Error {
+  public function login( $clear_connect_id = true ): array | \WP_Error {
     $function = 'Login';
     $skip_connect_id = true;
 

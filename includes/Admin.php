@@ -393,7 +393,6 @@ class Admin {
     $options = ProductSync::get_options();
     $frequency = $options['sync_schedule_frequency'] ?? 'daily';
     $frequencies = [
-      'every_5_minutes' => __( 'Every 5 Minutes (Testing)', 'df-fincon' ),
       'hourly' => __( 'Hourly', 'df-fincon' ),
       'daily' => __( 'Daily', 'df-fincon' ),
       'weekly' => __( 'Weekly', 'df-fincon' ),
@@ -456,7 +455,6 @@ class Admin {
     $options = CustomerSync::get_options();
     $frequency = $options['customer_sync_schedule_frequency'] ?? 'daily';
     $frequencies = [
-      'every_5_minutes' => __( 'Every 5 Minutes (Testing)', 'df-fincon' ),
       'hourly' => __( 'Hourly', 'df-fincon' ),
       'daily' => __( 'Daily', 'df-fincon' ),
       'weekly' => __( 'Weekly', 'df-fincon' ),

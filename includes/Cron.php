@@ -92,10 +92,6 @@ class Cron {
    * @return array Modified schedules
    */
   public static function add_custom_cron_schedules( array $schedules ): array {
-    $schedules['every_5_minutes'] = [
-      'interval' => 5 * MINUTE_IN_SECONDS,
-      'display'  => __( 'Every 5 Minutes', 'df-fincon' ),
-    ];
     
     // Add invoice check schedule
     $invoice_checker_options = InvoiceChecker::get_options();
