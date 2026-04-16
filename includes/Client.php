@@ -97,8 +97,9 @@ class Client {
   }
 
   public function request( ): array|\WP_Error {
-    if ($this->request_body)
-      $this->request_body_json = wp_json_encode( $this->request_body );
+    $this->request_body_json = '';
+    if ( $this->request_body )
+        $this->request_body_json = wp_json_encode( $this->request_body );
 
     $args = [
       'url'        => $this->path,

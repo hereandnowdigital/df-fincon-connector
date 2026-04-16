@@ -393,6 +393,7 @@ class Admin {
     $options = ProductSync::get_options();
     $frequency = $options['sync_schedule_frequency'] ?? 'daily';
     $frequencies = [
+      'every_15_minutes' => __( 'Every 15 Minutes (Testing)', 'df-fincon' ),
       'hourly' => __( 'Hourly', 'df-fincon' ),
       'daily' => __( 'Daily', 'df-fincon' ),
       'weekly' => __( 'Weekly', 'df-fincon' ),
@@ -455,6 +456,7 @@ class Admin {
     $options = CustomerSync::get_options();
     $frequency = $options['customer_sync_schedule_frequency'] ?? 'daily';
     $frequencies = [
+      'every_15_minutes' => __( 'Every 15 Minutes (Testing)', 'df-fincon' ),
       'hourly' => __( 'Hourly', 'df-fincon' ),
       'daily' => __( 'Daily', 'df-fincon' ),
       'weekly' => __( 'Weekly', 'df-fincon' ),
@@ -540,7 +542,7 @@ class Admin {
     
     $sanitized['sync_schedule_enabled'] = isset( $input['sync_schedule_enabled'] ) ? 1 : 0;
     
-    $allowed_frequencies = [ 'every_5_minutes', 'hourly', 'daily', 'weekly' ];
+    $allowed_frequencies = [ 'every_5_minutes', 'every_15_minutes', 'hourly', 'daily', 'weekly' ];
     $sanitized['sync_schedule_frequency'] = isset( $input['sync_schedule_frequency'] ) && in_array( $input['sync_schedule_frequency'], $allowed_frequencies ) ? $input['sync_schedule_frequency'] : 'daily';
     
     $sanitized['sync_schedule_time'] = isset( $input['sync_schedule_time'] ) ? sanitize_text_field( $input['sync_schedule_time'] ) : '23:00';
@@ -582,7 +584,7 @@ class Admin {
     // New cron settings
     $sanitized['customer_sync_schedule_enabled'] = isset( $input['customer_sync_schedule_enabled'] ) ? 1 : 0;
     
-    $allowed_frequencies = [ 'every_5_minutes', 'hourly', 'daily', 'weekly' ];
+    $allowed_frequencies = [ 'every_5_minutes', 'every_15_minutes', 'hourly', 'daily', 'weekly' ];
     $sanitized['customer_sync_schedule_frequency'] = isset( $input['customer_sync_schedule_frequency'] ) && in_array( $input['customer_sync_schedule_frequency'], $allowed_frequencies ) ? $input['customer_sync_schedule_frequency'] : 'daily';
     
     $sanitized['customer_sync_schedule_time'] = isset( $input['customer_sync_schedule_time'] ) ? sanitize_text_field( $input['customer_sync_schedule_time'] ) : '23:00';

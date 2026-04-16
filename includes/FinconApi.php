@@ -250,6 +250,12 @@ class FinconApi {
    * @return array|\WP_Error The Fincon API result array or a WP_Error object.
    */
   private function send_request( string $method, string $function_name, array $query_params = [],  array $request_body = [], $skip_connect_id = false): array|\WP_Error {
+    if ( ! $skip_connect_id && empty( self::$connect_id ) ) {
+      $connect_id_result = $this->create_connect_id();
+      if ( is_wp_error( $connect_id_result ) )
+        return $connect_id_result;
+    }
+
     $path = self::build_path( $function_name, $query_params, $skip_connect_id );
     self::$client->method = $method;
     self::$client->path = $path;
@@ -271,20 +277,30 @@ class FinconApi {
     if (is_wp_error( $result )) 
       return $result;
     
-    if ( !$skip_connect_id ) 
-      if ( self::is_invalid_connect_id_response( $result ) ):
-        $connect_id_result = self::create_connect_id();
-        if ( is_wp_error( $connect_id_result ) ) :
-          $error = $connect_id_result;
-          return $error;
-        endif;
+    if ( !$skip_connect_id ) {
+      if ( self::is_invalid_connect_id_response( $result ) ) :
+          $connect_id_result = self::create_connect_id();
+          
+          if ( is_wp_error( $connect_id_result ) ) :
+              $error = $connect_id_result;
+              return $error;
+          endif;
 
-        //rebuild path with update connect_id
-        $path = self::build_path( $function_name, $query_params, $skip_connect_id );
-        //retry request
-        $result = self::$client->request();
+          // Rebuild path with updated connect_id
+          $path = self::build_path( $function_name, $query_params, $skip_connect_id );
 
+          /** * FIX: We must re-assign the original request properties to the client.
+           * Otherwise, the client still contains the POST body and method from the login() call.
+           */
+          self::$client->method       = $method;
+          self::$client->path         = $path;
+          self::$client->request_body = $request_body; // Restores the original empty array/params
+          self::$client->auth_header  = self::build_auth_header();
+
+          // Retry request
+          $result = self::$client->request();
       endif;
+    }
 
     if ( is_wp_error($result) ) :
       $error = $result;
@@ -342,9 +358,12 @@ class FinconApi {
     endif;
 
     // Append parameters as raw path segments.
-    if ( ! empty( $parameters ) ) 
-        $path .= implode( '/', $parameters );
-    
+    if ( ! empty( $parameters ) ) {
+      $encoded = array_map( function( $param ) {
+          return rawurlencode( (string) $param );
+      }, $parameters );
+      $path .= implode( '/', $encoded );
+    }
     // Trailing slash for consistency
     $path = rtrim( $path, '/' ) . '/';
     Logger::info('build_path:', $path);

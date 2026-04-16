@@ -93,6 +93,11 @@ class Cron {
    */
   public static function add_custom_cron_schedules( array $schedules ): array {
     
+    $schedules['every_15_minutes'] = [
+      'interval' => 900,
+      'display'  => __( 'Every 15 Minutes (Fincon Testing)', 'df-fincon' ),
+    ];
+
     // Add invoice check schedule
     $invoice_checker_options = InvoiceChecker::get_options();
     $check_interval = (int) ( $invoice_checker_options['check_interval'] ?? 900 ); // Default 15 minutes
@@ -307,7 +312,10 @@ class Cron {
     $hour = (int) $hour;
     $minute = (int) $minute;
 
-    if ( $frequency === 'every_5_minutes' ) :
+    if ( $frequency === 'every_5_minutes' || $frequency === 'every_15_minutes' ) :
+      
+      $interval_minutes = $frequency === 'every_15_minutes' ? 15 : 5;
+
       // For 5 minutes, run at the next 5-minute mark (0, 5, 10, 15, etc.)
       $current_minute = (int) $now->format( 'i' );
       $next_minute_mark = (int) ( ceil( ( $current_minute + 1 ) / 5 ) * 5 );
@@ -372,6 +380,7 @@ class Cron {
     private static function get_wp_schedule( string $frequency ): string|false {
       return match( $frequency ) {
         'every_5_minutes' => 'every_5_minutes',
+        'every_15_minutes' => 'every_15_minutes',
         'hourly' => 'hourly',
         'daily' => 'daily',
         'weekly' => 'weekly',
@@ -420,9 +429,9 @@ class Cron {
         $total_skipped += $result['skipped_count'] ?? 0;
         $total_imported += $result['imported_count'] ?? 0;
         
-        $batch_state = $result['batch_state'] ?? [];
-        $total_processed = $batch_state['total_processed'] ?? 0;
-        $is_complete = $result['batch_complete'] ?? false;
+        $progress = $result['progress'] ?? [];
+        $total_processed = $progress['total_processed'] ?? 0;
+        $is_complete = $result['import_complete'] ?? false;
       }
       
       $end_time = current_time( 'mysql' );
@@ -507,9 +516,9 @@ class Cron {
         self::log_cron_run( 'failed', $end_time, $duration, $error_message, 'customer' );
         Logger::error( 'Scheduled customer sync failed: ' . $error_message, $result );
       else :
-        $batch_state = $result['batch_state'] ?? [];
-        $is_complete = $result['batch_complete'] ?? false;
-        $total_processed = $batch_state['total_processed'] ?? 0;
+        $is_complete = $result['import_complete'] ?? false;
+        $progress = $result['progress'] ?? [];
+        $total_processed = $progress['total_processed'] ?? 0;
         
         if ( $is_complete ) :
           $summary = sprintf(
@@ -537,7 +546,7 @@ class Cron {
           'summary' => $summary,
           'next_scheduled' => wp_next_scheduled( self::CUSTOMER_HOOK ),
           'batch_complete' => $is_complete ?? false,
-          'batch_state' => $batch_state,
+          'batch_state' => $progress,
         ] );
       endif;
       
