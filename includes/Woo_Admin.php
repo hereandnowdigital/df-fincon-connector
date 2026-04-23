@@ -122,6 +122,14 @@ class Woo_Admin {
     add_filter( 'posts_where', [ __CLASS__, 'filter_orders_by_price_list_where' ], 10, 2 );
     add_filter( 'posts_join', [ __CLASS__, 'filter_orders_by_fincon_order_join' ], 10, 2 );
     add_filter( 'posts_where', [ __CLASS__, 'filter_orders_by_fincon_order_where' ], 10, 2 );
+
+    // Lifecycle state filter – traditional CPT
+    add_action( 'restrict_manage_posts', [ __CLASS__, 'add_fincon_lifecycle_state_filter' ], 25 );
+    add_filter( 'request',               [ __CLASS__, 'filter_orders_by_lifecycle_state' ] );
+
+    // Lifecycle state filter – HPOS
+    add_action( 'woocommerce_order_list_table_restrict_manage_orders', [ __CLASS__, 'add_fincon_lifecycle_state_filter' ], 25 );
+
   }
 
   private static function register_filters_products(): void {
@@ -1556,6 +1564,225 @@ echo '<h3>' . __( 'FinCon Data', 'df-fincon' ) . '</h3>';
 
 
 
+  }
+
+  /**
+   * Render the horizontal lifecycle progress strip at the top of the Fincon
+   * Order Info meta box.
+   *
+   * Displays only when the order has a QuoteNo (i.e. was sent as a quotation).
+   * For orders sent as sales orders the strip is skipped so the existing UI
+   * is completely unaffected.
+   *
+   * @param \WC_Order $order
+   * @return void
+   * @since 1.2.0
+   */
+  public static function render_lifecycle_progress_strip( \WC_Order $order ): void {
+    $quote_no = $order->get_meta( OrderSync::META_QUOTE_NO );
+    if ( empty( $quote_no ) )
+      return; // Sales-order mode – nothing to show
+ 
+    $state   = (string) $order->get_meta( OrderSync::META_LIFECYCLE_STATE );
+    $history = $order->get_meta( OrderSync::META_LIFECYCLE_HISTORY );
+    if ( ! is_array( $history ) )
+      $history = [];
+ 
+    // Build a timestamp lookup keyed by state name
+    $ts_lookup = [];
+    foreach ( $history as $entry ) {
+      if ( isset( $entry['state'], $entry['timestamp'] ) )
+        $ts_lookup[ $entry['state'] ] = $entry['timestamp'];
+    }
+ 
+    $steps = [
+      'quote_created'        => __( 'Quote Sent',     'df-fincon' ),
+      'sales_order_created'  => __( 'Sales Order',    'df-fincon' ),
+      'sales_order_approved' => __( 'Approved',       'df-fincon' ),
+      'invoice_created'      => __( 'Invoice',        'df-fincon' ),
+    ];
+ 
+    $state_order   = array_keys( $steps );
+    $current_index = array_search( $state, $state_order, true );
+    ?>
+    <div class="fincon-lifecycle-strip" style="margin-bottom:12px;">
+      <ol style="display:flex;list-style:none;margin:0;padding:0;gap:4px;flex-wrap:wrap;">
+        <?php foreach ( $steps as $step_key => $step_label ) :
+          $step_index  = array_search( $step_key, $state_order, true );
+          $is_complete = $current_index !== false && $step_index <= $current_index;
+          $is_error    = $state === 'quote_expired' && $step_key === 'quote_created';
+          $timestamp   = $ts_lookup[ $step_key ] ?? '';
+ 
+          if ( $is_error ) :
+            $icon = '✗'; $colour = '#dc3232';
+          elseif ( $is_complete && $step_index === $current_index && $step_key !== 'invoice_created' ) :
+            $icon = '⏳'; $colour = '#f0ad4e';
+          elseif ( $is_complete ) :
+            $icon = '✓'; $colour = '#46b450';
+          else :
+            $icon = '○'; $colour = '#ccc';
+          endif;
+ 
+          $title = $timestamp
+            ? esc_attr( date_i18n( get_option('date_format') . ' ' . get_option('time_format'), strtotime( $timestamp ) ) )
+            : '';
+          ?>
+          <li title="<?php echo $title; ?>"
+              style="display:flex;align-items:center;gap:3px;font-size:12px;color:<?php echo esc_attr( $colour ); ?>;font-weight:<?php echo $is_complete ? 'bold' : 'normal'; ?>;">
+            <span><?php echo $icon; ?></span>
+            <span><?php echo esc_html( $step_label ); ?></span>
+            <?php if ( $step_index < count( $steps ) - 1 ) : ?>
+              <span style="color:#ccc;margin-left:4px;">→</span>
+            <?php endif; ?>
+          </li>
+        <?php endforeach; ?>
+ 
+        <?php if ( $state === 'quote_expired' ) : ?>
+          <li style="font-size:12px;color:#dc3232;font-weight:bold;margin-left:8px;">
+            <?php esc_html_e( 'Quote Expired', 'df-fincon' ); ?>
+          </li>
+        <?php endif; ?>
+      </ol>
+ 
+      <?php
+      // QuoteNo display
+      printf(
+        '<p style="margin:4px 0 0;font-size:12px;"><strong>%s</strong> <code>%s</code></p>',
+        esc_html__( 'Quote:', 'df-fincon' ),
+        esc_html( $quote_no )
+      );
+      ?>
+    </div>
+ 
+    <?php
+    // Re-scan button – shown only when quote exists but no sales order found yet
+    $order_no = $order->get_meta( OrderSync::META_ORDER_NO );
+    if ( ! empty( $quote_no ) && empty( $order_no ) && $state !== 'quote_expired' ) :
+      $attempts = (int) $order->get_meta( OrderSync::META_SALES_ORDER_LOOKUP_ATTEMPTS );
+      ?>
+      <p style="margin-bottom:12px;">
+        <button type="button"
+                class="button button-secondary"
+                id="fincon-rescan-sales-order"
+                data-order-id="<?php echo esc_attr( $order->get_id() ); ?>"
+                data-nonce="<?php echo esc_attr( wp_create_nonce( 'df_fincon_rescan_sales_order_' . $order->get_id() ) ); ?>">
+          <?php esc_html_e( 'Re-scan for Sales Order', 'df-fincon' ); ?>
+        </button>
+        <span class="spinner" style="float:none;margin-left:5px;"></span>
+        <?php if ( $attempts > 0 ) : ?>
+          <span class="description" style="margin-left:8px;font-size:12px;">
+            <?php printf(
+              esc_html__( 'Polled Fincon %d time(s) so far.', 'df-fincon' ),
+              $attempts
+            ); ?>
+          </span>
+        <?php endif; ?>
+        <div id="fincon-rescan-result" style="margin-top:8px;display:none;"></div>
+      </p>
+ 
+      <script>
+      jQuery( document ).ready( function( $ ) {
+        $( '#fincon-rescan-sales-order' ).on( 'click', function() {
+          var $btn     = $( this );
+          var $spinner = $btn.next( '.spinner' );
+          var $result  = $( '#fincon-rescan-result' );
+ 
+          $btn.prop( 'disabled', true );
+          $spinner.addClass( 'is-active' );
+          $result.hide().empty();
+ 
+          $.post( ajaxurl, {
+            action:   'df_fincon_rescan_sales_order',
+            order_id: $btn.data( 'order-id' ),
+            nonce:    $btn.data( 'nonce' ),
+          } )
+          .done( function( response ) {
+            var colour = response.success ? 'green' : 'red';
+            $result.html( '<span style="color:' + colour + ';">' + response.data.message + '</span>' ).show();
+            if ( response.success && response.data.order_no ) {
+              // Brief pause then reload so the strip updates
+              setTimeout( function() { location.reload(); }, 1500 );
+            }
+          } )
+          .fail( function() {
+            $result.html( '<span style="color:red;"><?php esc_html_e( 'Request failed.', 'df-fincon' ); ?></span>' ).show();
+          } )
+          .always( function() {
+            $btn.prop( 'disabled', false );
+            $spinner.removeClass( 'is-active' );
+          } );
+        } );
+      } );
+      </script>
+      <?php
+    endif;
+  }
+ 
+  /**
+   * Add a "Filter by Fincon State" dropdown to the WooCommerce orders list.
+   *
+   * @return void
+   * @since 1.2.0
+   */
+  public static function add_fincon_lifecycle_state_filter(): void {
+    global $typenow, $pagenow;
+ 
+    $is_traditional = ( 'shop_order' === $typenow && 'edit.php' === $pagenow );
+    $is_hpos        = ( ( $_GET['page'] ?? '' ) === 'wc-orders' && 'admin.php' === $pagenow );
+ 
+    if ( ! $is_traditional && ! $is_hpos )
+      return;
+ 
+    $current = sanitize_text_field( $_GET['fincon_lifecycle_state'] ?? '' );
+ 
+    $states = [
+      ''                     => __( 'All Fincon states',                'df-fincon' ),
+      'quote_created'        => __( 'Quote – awaiting sales order',     'df-fincon' ),
+      'sales_order_created'  => __( 'Sales order – awaiting approval',  'df-fincon' ),
+      'sales_order_approved' => __( 'Approved – awaiting invoice',      'df-fincon' ),
+      'invoice_created'      => __( 'Invoiced',                         'df-fincon' ),
+      'invoice_downloaded'   => __( 'Invoiced – PDF downloaded',        'df-fincon' ),
+      'quote_expired'        => __( 'Quote expired',                    'df-fincon' ),
+    ];
+    ?>
+    <select name="fincon_lifecycle_state" id="fincon_lifecycle_state">
+      <?php foreach ( $states as $key => $label ) : ?>
+        <option value="<?php echo esc_attr( $key ); ?>" <?php selected( $current, $key ); ?>>
+          <?php echo esc_html( $label ); ?>
+        </option>
+      <?php endforeach; ?>
+    </select>
+    <?php
+  }
+ 
+  /**
+   * Apply the lifecycle-state filter to the WooCommerce orders query
+   * (traditional CPT / non-HPOS).
+   *
+   * @param array $query_vars Incoming query vars.
+   * @return array Modified query vars.
+   * @since 1.2.0
+   */
+  public static function filter_orders_by_lifecycle_state( array $query_vars ): array {
+    global $typenow;
+ 
+    if ( 'shop_order' !== $typenow )
+      return $query_vars;
+ 
+    $state = sanitize_text_field( $_GET['fincon_lifecycle_state'] ?? '' );
+    if ( empty( $state ) )
+      return $query_vars;
+ 
+    if ( ! isset( $query_vars['meta_query'] ) )
+      $query_vars['meta_query'] = [];
+ 
+    $query_vars['meta_query'][] = [
+      'key'     => OrderSync::META_LIFECYCLE_STATE,
+      'value'   => $state,
+      'compare' => '=',
+    ];
+ 
+    return $query_vars;
   }
 
 }

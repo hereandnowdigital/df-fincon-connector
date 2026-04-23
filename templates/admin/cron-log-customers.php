@@ -1,21 +1,21 @@
 <div class="wrap">
-  <h1><?php esc_html_e( 'Product Sync Log', 'df-fincon' ); ?></h1>
+  <h1><?php esc_html_e( 'Customer Sync Log', 'df-fincon' ); ?></h1>
   
-  <?php settings_errors( 'df_fincon_cron_log_products' ); ?>
+  <?php settings_errors( 'df_fincon_cron_log_customers' ); ?>
   
-  <p><?php esc_html_e( 'This page shows file-based logs for product cron sync operations. Each log file contains per-product details including SKU, WooCommerce ID, and status.', 'df-fincon' ); ?></p>
+  <p><?php esc_html_e( 'This page shows file-based logs for customer cron sync operations. Each log file contains per-customer details including AccNo, WooCommerce user ID, and status.', 'df-fincon' ); ?></p>
   
   <div class="notice notice-info">
     <p>
-      <strong><?php esc_html_e( 'Product cron logging status:', 'df-fincon' ); ?></strong>
+      <strong><?php esc_html_e( 'Customer cron logging status:', 'df-fincon' ); ?></strong>
       <?php if ( $logging_enabled ) : ?>
         <span style="color: #22A300;"><?php esc_html_e( 'Enabled', 'df-fincon' ); ?></span>
         <br>
-        <?php esc_html_e( 'Log files are being created in:', 'df-fincon' ); ?> <code><?php echo esc_html( \DF_FINCON\ProductCronLogger::get_log_dir() ); ?></code>
+        <?php esc_html_e( 'Log files are being created in:', 'df-fincon' ); ?> <code><?php echo esc_html( \DF_FINCON\CustomerCronLogger::get_log_dir() ); ?></code>
       <?php else : ?>
         <span style="color: #B32D2E;"><?php esc_html_e( 'Disabled', 'df-fincon' ); ?></span>
         <br>
-        <?php esc_html_e( 'Enable "Product cron log" in Product Import Settings to start logging.', 'df-fincon' ); ?>
+        <?php esc_html_e( 'Enable "Customer sync log" in Customer Import Settings to start logging.', 'df-fincon' ); ?>
       <?php endif; ?>
     </p>
   </div>
@@ -50,9 +50,9 @@
       
       <?php if ( ! empty( $log_files ) ) : ?>
         <p>
-          <a href="<?php echo esc_url( wp_nonce_url( add_query_arg( 'action', 'clear_all_logs' ), 'clear_all_product_cron_logs' ) ); ?>" 
+          <a href="<?php echo esc_url( wp_nonce_url( add_query_arg( 'action', 'clear_all_logs' ), 'clear_all_customer_cron_logs' ) ); ?>" 
              class="button" 
-             onclick="return confirm('<?php esc_attr_e( 'Are you sure you want to delete ALL product cron log files? This action cannot be undone.', 'df-fincon' ); ?>');">
+             onclick="return confirm('<?php esc_attr_e( 'Are you sure you want to delete ALL customer cron log files? This action cannot be undone.', 'df-fincon' ); ?>');">
             <?php esc_html_e( 'Delete All Logs', 'df-fincon' ); ?>
           </a>
           <span class="description" style="margin-left: 10px;">
@@ -95,7 +95,7 @@
                     <?php esc_html_e( 'View', 'df-fincon' ); ?>
                   </a>
                   
-                  <a href="<?php echo esc_url( wp_nonce_url( add_query_arg( [ 'action' => 'delete_log', 'file' => $file_info['name'] ] ), 'delete_product_cron_log' ) ); ?>" 
+                  <a href="<?php echo esc_url( wp_nonce_url( add_query_arg( [ 'action' => 'delete_log', 'file' => $file_info['name'] ] ), 'delete_customer_cron_log' ) ); ?>" 
                      class="button button-small button-link-delete"
                      onclick="return confirm('<?php esc_attr_e( 'Are you sure you want to delete this log file?', 'df-fincon' ); ?>');">
                     <?php esc_html_e( 'Delete', 'df-fincon' ); ?>
@@ -111,22 +111,22 @@
         </table>
       <?php else : ?>
         <div class="notice notice-info">
-          <p><?php esc_html_e( 'No product cron log files found. Log files will be created when scheduled product syncs run with logging enabled.', 'df-fincon' ); ?></p>
+          <p><?php esc_html_e( 'No customer cron log files found. Log files will be created when scheduled customer syncs run with logging enabled.', 'df-fincon' ); ?></p>
         </div>
       <?php endif; ?>
       
       <div class="df-fincon-log-info" style="margin-top: 30px; padding: 15px; background: #f5f5f5; border-left: 4px solid #0073AA;">
-        <h3><?php esc_html_e( 'About Product Sync Logs', 'df-fincon' ); ?></h3>
-        <p><?php esc_html_e( 'When enabled, product cron logs record:', 'df-fincon' ); ?></p>
+        <h3><?php esc_html_e( 'About Customer Sync Logs', 'df-fincon' ); ?></h3>
+        <p><?php esc_html_e( 'When enabled, customer cron logs record:', 'df-fincon' ); ?></p>
         <ul style="list-style-type: disc; margin-left: 20px;">
           <li><?php esc_html_e( 'Date and time the cron started (using site timezone)', 'df-fincon' ); ?></li>
-          <li><?php esc_html_e( 'Per-product details: SKU, WooCommerce ID, and status (created, updated, skipped)', 'df-fincon' ); ?></li>
+          <li><?php esc_html_e( 'Per-customer details: AccNo, WooCommerce user ID, and status (created, updated, skipped)', 'df-fincon' ); ?></li>
           <li><?php esc_html_e( 'Date and time the cron finished successfully', 'df-fincon' ); ?></li>
-          <li><?php esc_html_e( 'Summary of total products processed', 'df-fincon' ); ?></li>
+          <li><?php esc_html_e( 'Summary of total customers processed', 'df-fincon' ); ?></li>
         </ul>
         <p>
-          <a href="<?php echo esc_url( admin_url( 'admin.php?page=df-fincon-plugin-settings&tab=product' ) ); ?>" class="button">
-            <?php esc_html_e( 'Configure Product Sync Log Settings', 'df-fincon' ); ?>
+          <a href="<?php echo esc_url( admin_url( 'admin.php?page=df-fincon-plugin-settings&tab=customer' ) ); ?>" class="button">
+            <?php esc_html_e( 'Configure Customer Sync Log Settings', 'df-fincon' ); ?>
           </a>
         </p>
       </div>

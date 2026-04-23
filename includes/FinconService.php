@@ -190,7 +190,7 @@ class FinconService {
    * @param bool $web_list_only
    * @param bool $create_if_missing Whether to create new customers if not found.
    */
-  public static function import_customers( int $count, int $offset, bool $update_only_changed = false, bool $weblist_only = false, bool $create_if_missing = true ): array|\WP_Error {
+  public static function import_customers( int $count, int $offset, bool $update_only_changed = false, bool $weblist_only = false, bool $create_if_missing = true, ?CustomerCronLogger $logger = null ): array|\WP_Error {
     self::bootstrap_api();
     $response = self::$api->GetDebAccounts( '', '', $offset, $count );
     Logger::debug('response:', $response);
@@ -198,7 +198,7 @@ class FinconService {
       return $response;
 
     $customers = $response['Accounts'] ?? [];
-    $summary = self::process_customers( $customers, $update_only_changed, $create_if_missing );
+    $summary = self::process_customers( $customers, $update_only_changed, $create_if_missing, $logger );
     $summary['api_count'] = $response['Count'] ?? count( $customers );
     $summary['api_rec_no'] = $response['RecNo'] ?? $offset + count( $customers );
     $summary['batch_complete'] = ! self::$api->has_more();
@@ -214,24 +214,33 @@ class FinconService {
    * @param bool $create_if_missing
    * @return array
    */
-  public static function process_customers( array $customers, bool $update_only_changed = false, bool $create_if_missing = true ): array {
+  public static function process_customers( array $customers, bool $update_only_changed = false, bool $create_if_missing = true, ?CustomerCronLogger $logger = null ): array {
     $created_count = 0;
     $updated_count = 0;
     $skipped_count = 0;
     $errors = [];
 
     foreach ( $customers as $customer ) :
+      $acc_no = $customer['AccNo'] ?? 'N/A';
       try {
-        $result = CustomerSync::create_or_update_wc_customer( $customer, $update_only_changed, $create_if_missing );
-        if ( $result === CustomerSync::CUSTOMER_STATUS_CREATE )
+        $result = CustomerSync::create_or_update_customer( $customer, $update_only_changed, $create_if_missing );
+        $status = $result['status'] ?? CustomerSync::STATUS_SKIP;
+        $user_id = $result['user_ids'][0] ?? 0;
+
+        if ( $status === CustomerSync::STATUS_CREATE ) :
           $created_count++;
-        elseif ( $result === CustomerSync::CUSTOMER_STATUS_UPDATE )
+          $logger?->log_customer( $acc_no, $user_id, 'created' );
+        elseif ( $status === CustomerSync::STATUS_UPDATE ) :
           $updated_count++;
-        elseif ( $result === CustomerSync::CUSTOMER_STATUS_SKIP )
+          $logger?->log_customer( $acc_no, $user_id, 'updated' );
+        else :
           $skipped_count++;
+          $logger?->log_customer( $acc_no, $user_id, 'skipped' );
+        endif;
       } catch ( \Exception $e ) {
         $skipped_count++;
-        $errors[] = sprintf( 'Failed to import customer %s: %s', $customer['AccNo'] ?? 'N/A', $e->getMessage() );
+        $errors[] = sprintf( 'Failed to import customer %s: %s', $acc_no, $e->getMessage() );
+        $logger?->log_customer( $acc_no, 0, 'skipped', $e->getMessage() );
       }
     endforeach;
 

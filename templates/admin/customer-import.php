@@ -12,15 +12,15 @@
           <th scope="row"><label for="df_fincon_customer_accno"><?php esc_html_e( 'FinCon AccNo', 'df-fincon' ); ?></label></th>
           <td>
             <input type="text" id="df_fincon_customer_accno" value="" class="regular-text" placeholder="<?php esc_attr_e( 'e.g. TES001', 'df-fincon' ); ?>" />
-            <p class="description"><?php esc_html_e( 'Leave empty to run a batch import.', 'df-fincon' ); ?></p>
           </td>
         </tr>
         <tr>
           <td colspan="2">
             <p class="submit">
               <button id="df-fincon-customer-import-btn" class="button button-primary">
-                <?php esc_html_e( 'Run Customer Import', 'df-fincon' ); ?>
+                <?php esc_html_e( 'Import Single Customer', 'df-fincon' ); ?>
               </button>
+              <span id="df-fincon-customer-single-feedback" style="margin-left: 10px;"></span>
             </p>
           </td>
         </tr>
@@ -66,9 +66,10 @@
     </table>
 
     <p class="submit">
-      <button id="df-fincon-customer-import-btn" class="button button-primary">
-        <?php esc_html_e( 'Run Customer Import', 'df-fincon' ); ?>
+      <button id="df-fincon-customer-batch-import-btn" class="button button-primary">
+        <?php esc_html_e( 'Run Batch Import', 'df-fincon' ); ?>
       </button>
+      <span id="df-fincon-customer-batch-feedback" style="margin-left: 10px;"></span>
     </p>
   </div>
 
@@ -79,4 +80,3 @@
     <p><?php esc_html_e( 'Click the "Run Customer Import" button to start importing.', 'df-fincon' ); ?></p>
   </div>
 </div>
-

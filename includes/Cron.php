@@ -500,53 +500,99 @@ class Cron {
       $start_time = current_time( 'mysql' );
       $start_timestamp = current_time( 'timestamp' );
       self::log_cron_run( 'started', $start_time, 0, '', 'customer' );
-      
+
+      // Start customer cron log if enabled
+      $cron_logger = CustomerCronLogger::create();
+      $cron_log_started = $cron_logger->start_log();
+
+      $total_created  = 0;
+      $total_updated  = 0;
+      $total_skipped  = 0;
+      $total_imported = 0;
+      $total_processed = 0;
+
       $customer_options = CustomerSync::get_options();
-      $result = CustomerService::import_batch(
-        ! empty( $customer_options['customer_import_only_changed'] ),
-        ! empty( $customer_options['customer_weblist_only'] )
-      );
+
+      // Pass logger for per-customer verbose logging only if that option is enabled
+      $verbose_logger = null;
+      if ( $cron_log_started && ! empty( $customer_options['customer_cron_log_verbose'] ) ) {
+        $verbose_logger = $cron_logger;
+      }
+      
+      $is_complete = false;
+      $first_batch = true;
+      $has_error   = false;
+      $error_message = '';
+
+      while ( ! $is_complete && ! $has_error ) :
+        $result = CustomerService::import_batch(
+          ! empty( $customer_options['customer_import_only_changed'] ),
+          ! empty( $customer_options['customer_weblist_only'] ),
+          $verbose_logger
+        );
+        $first_batch = false;
+
+        if ( is_wp_error( $result ) ) :
+          $error_message = $result->get_error_message();
+          $has_error = true;
+          break;
+        endif;
+
+        $total_created   += $result['created_count'] ?? 0;
+        $total_updated   += $result['updated_count'] ?? 0;
+        $total_skipped   += $result['skipped_count'] ?? 0;
+        $total_imported  += $result['imported_count'] ?? 0;
+        $total_processed += $result['total_fetched'] ?? 0;
+        $is_complete      = $result['batch_complete'] ?? false;
+      endwhile;
       
       $end_time = current_time( 'mysql' );
       $end_timestamp = current_time( 'timestamp' );
       $duration = $end_timestamp - $start_timestamp;
-      
-      if ( is_wp_error( $result ) ) :
-        $error_message = $result->get_error_message();
+
+      if ( $has_error ) :
         self::log_cron_run( 'failed', $end_time, $duration, $error_message, 'customer' );
-        Logger::error( 'Scheduled customer sync failed: ' . $error_message, $result );
+        Logger::error( 'Scheduled customer sync failed: ' . $error_message );
+
+        if ( $cron_log_started ) :
+          $cron_logger->complete_log( $total_processed, $total_created, $total_updated, $total_skipped, $duration );
+        endif;
       else :
-        $is_complete = $result['import_complete'] ?? false;
-        $progress = $result['progress'] ?? [];
-        $total_processed = $progress['total_processed'] ?? 0;
-        
         if ( $is_complete ) :
           $summary = sprintf(
-            'Customer batch import COMPLETED. Total: %d (Created: %d, Updated: %d, Skipped: %d)',
+            'Customer import COMPLETED. Total: %d (Created: %d, Updated: %d, Skipped: %d)',
             $total_processed,
-            $result['created_count'] ?? 0,
-            $result['updated_count'] ?? 0,
-            $result['skipped_count'] ?? 0
+            $total_created,
+            $total_updated,
+            $total_skipped
           );
         else :
           $summary = sprintf(
-            'Customer batch: %d (Created: %d, Updated: %d, Skipped: %d). Total processed so far: %d. More batches remaining.',
-            $result['api_count'] ?? 0,
-            $result['created_count'] ?? 0,
-            $result['updated_count'] ?? 0,
-            $result['skipped_count'] ?? 0,
-            $total_processed
+            'Customer import incomplete. Processed: %d (Created: %d, Updated: %d, Skipped: %d).',
+            $total_processed,
+            $total_created,
+            $total_updated,
+            $total_skipped
           );
         endif;
-        
+
         self::log_cron_run( 'completed', $end_time, $duration, $summary, 'customer' );
-        
+
+        if ( $cron_log_started ) :
+          $cron_logger->complete_log(
+            $total_processed,
+            $total_created,
+            $total_updated,
+            $total_skipped,
+            $duration
+          );
+        endif;
+
         Logger::debug( 'Customer scheduled sync COMPLETED', [
-          'duration' => $duration,
-          'summary' => $summary,
+          'duration'       => $duration,
+          'summary'        => $summary,
           'next_scheduled' => wp_next_scheduled( self::CUSTOMER_HOOK ),
-          'batch_complete' => $is_complete ?? false,
-          'batch_state' => $progress,
+          'is_complete'    => $is_complete,
         ] );
       endif;
       
@@ -699,4 +745,3 @@ class Cron {
       delete_option( self::LOG_OPTION_NAME );
     }
 }
-

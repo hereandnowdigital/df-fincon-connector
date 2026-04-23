@@ -200,6 +200,66 @@ class OrderSync {
    */
   public const META_CUSTOMER_TYPE = '_fincon_customer_type';
 
+ /**
+   * Order meta key: Fincon quotation number.
+   * Populated as soon as CreateQuotation succeeds.
+   *
+   * @const string
+   * @since 1.2.0
+   */
+  public const META_QUOTE_NO = '_fincon_quote_no';
+ 
+  /**
+   * Order meta key: Timestamp of successful quote creation (MySQL datetime).
+   *
+   * @const string
+   * @since 1.2.0
+   */
+  public const META_QUOTE_TIMESTAMP = '_fincon_quote_timestamp';
+ 
+  /**
+   * Order meta key: Current Fincon lifecycle state.
+   *
+   * Valid values (in progression order):
+   *   quote_created | sales_order_created | sales_order_approved |
+   *   invoice_created | invoice_downloaded | quote_expired
+   *
+   * @const string
+   * @since 1.2.0
+   */
+  public const META_LIFECYCLE_STATE = '_fincon_lifecycle_state';
+ 
+  /**
+   * Order meta key: Lifecycle history.
+   *
+   * Serialised array of entries:
+   *   [ 'state' => string, 'timestamp' => string (MySQL datetime) ]
+   *
+   * @const string
+   * @since 1.2.0
+   */
+  public const META_LIFECYCLE_HISTORY = '_fincon_lifecycle_history';
+ 
+  /**
+   * Order meta key: Number of times the cron has polled Fincon looking for a
+   * sales order linked to this order's QuoteNo.
+   * Mirrors the existing META_INVOICE_CHECK_ATTEMPTS pattern.
+   *
+   * @const string
+   * @since 1.2.0
+   */
+  public const META_SALES_ORDER_LOOKUP_ATTEMPTS = '_fincon_sales_order_lookup_attempts';
+ 
+  /**
+   * Maximum poll attempts for the sales-order resolver before the cron stops
+   * automatically retrying. The operator can trigger a manual re-scan via the
+   * meta-box button after this limit is reached.
+   *
+   * @const int
+   * @since 1.2.0
+   */
+  public const MAX_SALES_ORDER_LOOKUP_ATTEMPTS = 30;
+
   /**
    * Default stock location (Johannesburg)
    *
@@ -259,10 +319,8 @@ class OrderSync {
    * Constructor (private for singleton)
    */
   private function __construct() {
-    
     self::register_actions();
-    self::register_actions();
-
+    self::register_filters();
   }
 
   /**
@@ -279,7 +337,8 @@ class OrderSync {
   }
 
   private function register_actions() {
-
+    add_action( 'woocommerce_order_status_cancelled', [ self::class, 'expire_quote_on_cancel_or_refund' ] );
+    add_action( 'woocommerce_order_status_refunded',  [ self::class, 'expire_quote_on_cancel_or_refund' ] );
   }
 
   private function register_filters() {
@@ -373,7 +432,7 @@ class OrderSync {
     }
     
     $order_sync = self::create();
-    $result = $order_sync->sync_order( $order_id );
+    $result = $order_sync->sync_order_dispatch( $order_id );
 
     if ( is_wp_error( $result ) )
       Logger::error( 'Order sync failed on payment complete', [
@@ -432,7 +491,7 @@ class OrderSync {
     }
 
     $order_sync = self::create();
-    $result = $order_sync->sync_order( $order_id );
+    $result = $order_sync->sync_order_dispatch( $order_id );
 
     if ( is_wp_error( $result ) )
       Logger::error( 'Order sync failed on status processing', [
@@ -593,234 +652,208 @@ class OrderSync {
   private function prepare_order_data( \WC_Order $order ): array|\WP_Error {
     // Get order sync options
     $options = self::get_options();
-    
+ 
     // Check if order sync is enabled
     if ( empty( $options['order_sync_enabled'] ) )
       return new \WP_Error( 'order_sync_disabled', 'Order sync is disabled in plugin settings.' );
-
+ 
     // Get customer AccNo from user meta
     $customer_id = $order->get_customer_id();
     $acc_no = $customer_id ? get_user_meta( $customer_id, CustomerSync::META_ACCNO, true ) : '';
-
+ 
     // If no AccNo, use B2C debt account for guests/retail customers
     if ( empty( $acc_no ) ) {
       $b2c_account = $options['b2c_debt_account'] ?? '';
-      
+ 
       if ( empty( $b2c_account ) )
         return new \WP_Error( 'missing_b2c_account', sprintf(
           'Customer %s does not have Fincon account number and no B2C debt account is configured.',
           $customer_id ?: 'Guest'
         ) );
-      
+ 
       $acc_no = $b2c_account;
     }
-
+ 
     // Get price list from order meta
-    $price_list = $order->get_meta( self::META_PRICE_LIST );
+    $price_list       = $order->get_meta( self::META_PRICE_LIST );
     $price_list_label = $order->get_meta( self::META_PRICE_LIST_LABEL );
-    $customer_type = $order->get_meta( self::META_CUSTOMER_TYPE );
-    
-    // Log price list information
+    $customer_type    = $order->get_meta( self::META_CUSTOMER_TYPE );
+ 
     Logger::info( 'Preparing order data with price list', [
-      'order_id' => $order->get_id(),
-      'price_list' => $price_list,
-      'price_list_label' => $price_list_label,
-      'customer_type' => $customer_type,
-      'customer_id' => $customer_id,
-      'acc_no' => $acc_no,
+      'order_id'        => $order->get_id(),
+      'price_list'      => $price_list,
+      'price_list_label'=> $price_list_label,
+      'customer_type'   => $customer_type,
+      'customer_id'     => $customer_id,
+      'acc_no'          => $acc_no,
     ] );
-
+ 
     // Format date as CCYYMMDD
-    $order_date = $order->get_date_created();
+    $order_date    = $order->get_date_created();
     $date_required = $order_date ? $order_date->format( 'Ymd' ) : date( 'Ymd' );
-
+ 
     // Prepare order header
     $order_data = [
-      'AccNo' => $acc_no,
-      'LocNo' => $this->get_order_locno( $order ),
-      'OrderType' => 'N', // Always 'N' for Normal
-      'OrderDate' => $date_required,
+      'AccNo'        => $acc_no,
+      'LocNo'        => $this->get_order_locno( $order ),
+      'OrderType'    => 'N',
+      'OrderDate'    => $date_required,
       'DateRequired' => $date_required,
-      'CustomerRef' => sprintf( 'WC-%d', $order->get_id() ),
-      'RepCode' => $this->get_order_repcode( $order ),
+      'CustomerRef'  => sprintf( 'WC-%d', $order->get_id() ),
+      'RepCode'      => $this->get_order_repcode( $order ),
       'CurrencyCode' => self::DEFAULT_CURRENCY,
       'ExchangeRate' => self::DEFAULT_EXCHANGE_RATE,
-      'DebName' => $order->get_billing_company() ?: $order->get_billing_first_name() . ' ' . $order->get_billing_last_name(),
-      'Addr1' => $order->get_billing_address_1(),
-      'Addr2' => $order->get_billing_address_2(),
-      'Addr3' => $order->get_billing_city(),
-      'PCode' => $order->get_billing_postcode(),
-      'DelName' => $order->get_shipping_company() ?: $order->get_shipping_first_name() . ' ' . $order->get_shipping_last_name(),
-      'DelAddr1' => $order->get_shipping_address_1(),
-      'DelAddr2' => $order->get_shipping_address_2(),
-      'DelAddr3' => $order->get_shipping_city(),
-      'DelAddr4' => $order->get_shipping_state(),
-      'DelPCode' => $order->get_shipping_postcode(),
-      'DelInstruc1' => $order->get_shipping_method(),
+      'TotalTax'     => (float) $order->get_total_tax(),   // ← added
+      'DebName'      => $order->get_billing_company() ?: $order->get_billing_first_name() . ' ' . $order->get_billing_last_name(),
+      'Addr1'        => $order->get_billing_address_1(),
+      'Addr2'        => $order->get_billing_address_2(),
+      'Addr3'        => $order->get_billing_city(),
+      'PCode'        => $order->get_billing_postcode(),
+      'DelName'      => $order->get_shipping_company() ?: $order->get_shipping_first_name() . ' ' . $order->get_shipping_last_name(),
+      'DelAddr1'     => $order->get_shipping_address_1(),
+      'DelAddr2'     => $order->get_shipping_address_2(),
+      'DelAddr3'     => $order->get_shipping_city(),
+      'DelAddr4'     => $order->get_shipping_state(),
+      'DelPCode'     => $order->get_shipping_postcode(),
+      'DelInstruc1'  => $order->get_shipping_method(),
       'DeliveryMethod' => $this->map_delivery_method( $order->get_shipping_method() ),
-      'TaxNo' => $order->get_meta( '_billing_vat_number' ) ?: '',
-      'Approved' => 'Y', // SetAsApproved=true since payment is complete
+      'TaxNo'        => $order->get_meta( '_billing_vat_number' ) ?: '',
+      'Approved'     => 'Y',
     ];
-
+ 
     // Add price list information to order data for logging
     if ( ! empty( $price_list ) ) {
       $order_data['_price_list_info'] = [
-        'price_list' => $price_list,
+        'price_list'       => $price_list,
         'price_list_label' => $price_list_label,
-        'customer_type' => $customer_type,
+        'customer_type'    => $customer_type,
       ];
     }
-
+ 
     // Prepare order items
-    $order_items = [];
+    $order_items          = [];
     $total_line_total_excl = 0;
-    $total_retail_value = 0;
-    
+    $total_retail_value   = 0;
+ 
     foreach ( $order->get_items() as $item ) {
       /** @var \WC_Order_Item_Product $item */
       $product = $item->get_product();
-      
+ 
       if ( ! $product )
         continue;
-
+ 
       $sku = $product->get_sku();
-      
+ 
       if ( empty( $sku ) ) {
         Logger::warning( 'Product missing SKU, skipping order item', [
-          'order_id' => $order->get_id(),
+          'order_id'   => $order->get_id(),
           'product_id' => $product->get_id(),
           'product_name' => $product->get_name(),
         ] );
         continue;
       }
-
-      // Calculate line total based on price list
+ 
       $line_total_excl = (float) $item->get_total();
-      $item_quantity = (float) $item->get_quantity();
-      
-      // If dealer price list, verify the line total matches dealer pricing
+      $line_total_tax  = (float) $item->get_total_tax();   // ← default from WC
+      $item_quantity   = (float) $item->get_quantity();
+ 
+      // ── Dealer pricing recalculation ──────────────────────────────────
       if ( ! empty( $price_list ) && $price_list > CustomerSync::PRICE_LIST_RETAIL ) {
         $dealer_price = Woo::get_price_for_price_list( $product, (int) $price_list );
-        $promo_price = Woo::get_promotional_price_for_price_list( $product, (int) $price_list );
+        $promo_price  = Woo::get_promotional_price_for_price_list( $product, (int) $price_list );
         $effective_price = $promo_price ?: $dealer_price;
-        
+ 
         if ( $effective_price !== null ) {
           $calculated_line_total = $effective_price * $item_quantity;
-          $retail_price = Woo::get_price_for_price_list( $product, CustomerSync::PRICE_LIST_RETAIL );
-          
-          // Log price comparison for debugging
+          $retail_price          = Woo::get_price_for_price_list( $product, CustomerSync::PRICE_LIST_RETAIL );
+ 
           Logger::debug( 'Price list comparison for order item', [
-            'order_id' => $order->get_id(),
-            'product_id' => $product->get_id(),
-            'sku' => $sku,
-            'price_list' => $price_list,
-            'item_quantity' => $item_quantity,
-            'item_total' => $line_total_excl,
-            'dealer_price' => $dealer_price,
-            'promo_price' => $promo_price,
-            'effective_price' => $effective_price,
-            'calculated_line_total' => $calculated_line_total,
-            'retail_price' => $retail_price,
-            'difference' => abs( $line_total_excl - $calculated_line_total ),
+            'order_id'             => $order->get_id(),
+            'product_id'           => $product->get_id(),
+            'sku'                  => $sku,
+            'price_list'           => $price_list,
+            'item_quantity'        => $item_quantity,
+            'item_total'           => $line_total_excl,
+            'dealer_price'         => $dealer_price,
+            'promo_price'          => $promo_price,
+            'effective_price'      => $effective_price,
+            'calculated_line_total'=> $calculated_line_total,
+            'retail_price'         => $retail_price,
+            'difference'           => abs( $line_total_excl - $calculated_line_total ),
           ] );
-          
-          // Update line total if there's a significant difference (more than 0.01 for rounding)
+ 
           if ( abs( $line_total_excl - $calculated_line_total ) > 0.01 ) {
             Logger::warning( 'Line total mismatch for dealer pricing', [
-              'order_id' => $order->get_id(),
-              'product_id' => $product->get_id(),
-              'sku' => $sku,
-              'original_line_total' => $line_total_excl,
-              'calculated_line_total' => $calculated_line_total,
-              'difference' => $line_total_excl - $calculated_line_total,
+              'order_id'             => $order->get_id(),
+              'product_id'           => $product->get_id(),
+              'sku'                  => $sku,
+              'original_line_total'  => $line_total_excl,
+              'calculated_line_total'=> $calculated_line_total,
+              'difference'           => $line_total_excl - $calculated_line_total,
             ] );
-            
-            // Use the calculated line total for Fincon sync
+ 
             $line_total_excl = $calculated_line_total;
+ 
+            // Recalculate tax from the adjusted excl amount so LineTotalTax
+            // stays consistent with LineTotalExcl rather than the original
+            // WooCommerce cart tax figure.
+            $tax_rates      = \WC_Tax::get_rates( $product->get_tax_class() );
+            $taxes          = \WC_Tax::calc_tax( $line_total_excl, $tax_rates, false );
+            $line_total_tax = array_sum( $taxes );
           }
-          
-          // Track retail value for reporting
-          if ( $retail_price !== null ) {
+ 
+          if ( $retail_price !== null )
             $total_retail_value += $retail_price * $item_quantity;
-          }
         }
       }
-      
+      // ── end dealer pricing ────────────────────────────────────────────
+ 
       $total_line_total_excl += $line_total_excl;
-
+ 
       $order_items[] = [
-        'ItemNo' => $sku,
-        'Quantity' => $item_quantity,
+        'ItemNo'        => $sku,
+        'Quantity'      => $item_quantity,
         'LineTotalExcl' => $line_total_excl,
-        'Description' => substr( $product->get_name(), 0, 40 ),
-        'TaxCode' => self::DEFAULT_TAX_CODE, // TODO: Map from WC tax class
+        'LineTotalTax'  => $line_total_tax,   // ← added
+        'Description'   => substr( $product->get_name(), 0, 40 ),
+        'TaxCode'       => self::DEFAULT_TAX_CODE,
       ];
     }
-
+ 
     if ( empty( $order_items ) )
       return new \WP_Error( 'no_valid_items', 'Order contains no items with valid SKUs' );
-
+ 
     $order_data['SalesOrderDetail'] = $order_items;
-
-    // Add informational line items for payment and shipping methods
-    $payment_method_title = $order->get_payment_method_title();
-    $shipping_method_labels = [];
-    
-    foreach ( $order->get_shipping_methods() as $shipping_method ) {
-      $shipping_method_labels[] = $shipping_method->get_method_title();
-    }
-    
-    $shipping_method_info = ! empty( $shipping_method_labels )
-      ? implode( ', ', $shipping_method_labels )
-      : __( 'No shipping method', 'df-fincon' );
-    
-     #EM-TODO 
-    // // Add shipping method as informational line item
-    // $order_data['SalesOrderDetail'][] = [
-    //   'ItemNo' => '',
-    //   'Quantity' => 1,
-    //   'LineTotalExcl' => '0',
-    //   'Description' => 'Shipping Method: ' . substr( sanitize_text_field( $shipping_method_info ), 0, 40 ),
-    //   'TaxCode' => self::DEFAULT_TAX_CODE,
-    // ];
-    
-    // // Add payment method as informational line item
-    // $order_data['SalesOrderDetail'][] = [
-    //   'ItemNo' => '',
-    //   'Quantity' => 1,
-    //   'LineTotalExcl' => '0',
-    //   'Description' => 'Payment' . substr( sanitize_text_field( $payment_method_title ), 0, 40 ),
-    //   'TaxCode' => self::DEFAULT_TAX_CODE,
-    // ];
-
-    // Add pricing summary to order data for logging
+ 
+    // Add pricing summary to order data for logging (dealer orders only)
     if ( ! empty( $price_list ) && $price_list > CustomerSync::PRICE_LIST_RETAIL ) {
       $order_data['_pricing_summary'] = [
-        'price_list' => $price_list,
-        'total_line_total_excl' => $total_line_total_excl,
-        'total_retail_value' => $total_retail_value,
-        'savings' => $total_retail_value > 0 ? $total_retail_value - $total_line_total_excl : 0,
-        'savings_percentage' => $total_retail_value > 0 ? ( ($total_retail_value - $total_line_total_excl) / $total_retail_value ) * 100 : 0,
+        'price_list'           => $price_list,
+        'total_line_total_excl'=> $total_line_total_excl,
+        'total_retail_value'   => $total_retail_value,
+        'savings'              => $total_retail_value > 0 ? $total_retail_value - $total_line_total_excl : 0,
+        'savings_percentage'   => $total_retail_value > 0
+          ? ( ( $total_retail_value - $total_line_total_excl ) / $total_retail_value ) * 100
+          : 0,
       ];
-      
+ 
       Logger::info( 'Dealer pricing summary for order', [
-        'order_id' => $order->get_id(),
-        'price_list' => $price_list,
-        'total_line_total_excl' => $total_line_total_excl,
-        'total_retail_value' => $total_retail_value,
-        'savings' => $total_retail_value - $total_line_total_excl,
-        'item_count' => count( $order_items ),
+        'order_id'             => $order->get_id(),
+        'price_list'           => $price_list,
+        'total_line_total_excl'=> $total_line_total_excl,
+        'total_retail_value'   => $total_retail_value,
+        'savings'              => $total_retail_value - $total_line_total_excl,
+        'item_count'           => count( $order_items ),
       ] );
     }
-
+ 
     // Prepare payment data
     $payment_data = $this->prepare_payment_data( $order );
     if ( $payment_data )
       $order_data['SalesOrderPayment'] = $payment_data;
-
+ 
     return $order_data;
   }
-
   /**
    * Prepare payment data for Fincon API
    *
@@ -1086,6 +1119,7 @@ class OrderSync {
     
     // Save the order to persist meta data
     $order_id = $order->save();
+  
     
     Logger::debug( 'Order saved after meta updates', [
       'order_id' => $order->get_id(),
@@ -1093,7 +1127,25 @@ class OrderSync {
       'invoice_numbers' => $invoice_numbers,
       'invoice_status' => $order->get_meta( self::META_INVOICE_STATUS ),
     ] );
-    
+  
+    $fincon_order_no = $api_response['SalesOrderInfo']['OrderNo'] ?? '';
+
+    if ( ! empty( $fincon_order_no ) ) {
+      self::transition_lifecycle(
+        $order,
+        'sales_order_created',
+        sprintf( 'Fincon: Sales order %s created.', $fincon_order_no )
+      );
+      $approved = $api_response['SalesOrderInfo']['Approved'] ?? 'N';
+      if ( $approved === 'Y' ) {
+        self::transition_lifecycle(
+          $order,
+          'sales_order_approved',
+          'Fincon: Sales order approved.'
+        );
+      }
+    }
+
     // Reload order to verify save (optional)
     $reloaded_order = wc_get_order( $order->get_id() );
     if ( $reloaded_order ) {
@@ -1356,7 +1408,9 @@ class OrderSync {
       'price_list_label' => $price_list_label,
       'customer_type' => $customer_type,
     ] );
-    
+
+    \DF_FINCON\Woo_Admin::render_lifecycle_progress_strip( $order );
+
     ?>
     <div class="fincon-order-info" style="border: 2px solid #0073aa; background: #f0f8ff; padding: 10px;">
       <!-- DEBUG: Meta box rendered for order <?php echo (int) $order->get_id(); ?> -->
@@ -1803,6 +1857,7 @@ class OrderSync {
       'b2c_debt_account' => '',
       'order_sync_status_processing' => 0,
       'order_sync_status_completed' => 0,
+      'order_creation_mode' => 'sales_order',
     ];
     
     $options = get_option( self::OPTIONS_NAME, [] );
@@ -1814,6 +1869,369 @@ class OrderSync {
       else
         return null;
     return $options;
+  }
+
+/**
+   * Public sync entry point.
+   *
+   * Reads the "order_creation_mode" setting and routes to the quotation flow
+   * or the existing sales-order flow accordingly. All existing hooks that
+   * previously called sync_order() directly should call this instead.
+   *
+   * @param int $order_id WooCommerce order ID.
+   * @return array|\WP_Error
+   * @since 1.2.0
+   */
+  public function sync_order_dispatch( int $order_id ): array|\WP_Error {
+    $options = self::get_options();
+    $mode    = $options['order_creation_mode'] ?? 'sales_order';
+ 
+    if ( $mode === 'quotation' )
+      return $this->sync_order_as_quote( $order_id );
+ 
+    return $this->sync_order( $order_id ); // existing sales-order flow, unchanged
+  }
+ 
+
+  /**
+   * Send the WooCommerce order to Fincon as a quotation.
+   *
+   * @param int $order_id WooCommerce order ID.
+   * @return array|\WP_Error API response or WP_Error.
+   * @since 1.2.0
+   */
+  public function sync_order_as_quote( int $order_id ): array|\WP_Error {
+    $order = wc_get_order( $order_id );
+    if ( ! $order )
+      return new \WP_Error( 'invalid_order', sprintf( 'Order %d not found.', $order_id ) );
+ 
+    // Idempotency – never create a second quote for the same order
+    $existing_quote_no = $order->get_meta( self::META_QUOTE_NO );
+    if ( ! empty( $existing_quote_no ) ) {
+      Logger::info( 'Quote already exists for order, skipping.', [
+        'order_id' => $order_id,
+        'quote_no' => $existing_quote_no,
+      ] );
+      return [ 'skipped' => true, 'quote_no' => $existing_quote_no ];
+    }
+ 
+    $quote_data = $this->prepare_quote_data( $order );
+    if ( is_wp_error( $quote_data ) ) {
+      Logger::error( 'Failed to prepare quote data.', [
+        'order_id' => $order_id,
+        'error'    => $quote_data->get_error_message(),
+      ] );
+      $this->update_order_meta_on_error( $order, $quote_data );
+      return $quote_data;
+    }
+ 
+    $fincon_api = new FinconApi();
+    $response   = $fincon_api->create_quotation( $quote_data );
+ 
+    if ( is_wp_error( $response ) ) {
+      Logger::error( 'CreateQuotation API call failed.', [
+        'order_id' => $order_id,
+        'error'    => $response->get_error_message(),
+      ] );
+      $this->update_order_meta_on_error( $order, $response );
+      return $response;
+    }
+ 
+    $quote_no = $response['QuotationInfo']['QuoteNo'] ?? '';
+    if ( empty( $quote_no ) ) {
+      $error = new \WP_Error(
+        'fincon_quote_no_missing',
+        __( 'Fincon returned no QuoteNo on quotation creation.', 'df-fincon' )
+      );
+      $this->update_order_meta_on_error( $order, $error );
+      return $error;
+    }
+ 
+    // Persist
+    $order->update_meta_data( self::META_QUOTE_NO,        $quote_no );
+    $order->update_meta_data( self::META_QUOTE_TIMESTAMP, current_time( 'mysql' ) );
+    $order->update_meta_data( self::META_SYNCED,          true );
+    $order->update_meta_data( self::META_SYNC_TIMESTAMP,  current_time( 'mysql' ) );
+    $order->update_meta_data( self::META_SYNC_RESPONSE,   wp_json_encode( $response ) );
+    $order->delete_meta_data( self::META_SYNC_ERROR );
+    $order->update_meta_data( self::META_SYNC_RETRY_COUNT, 0 );
+ 
+    // Initialise invoice-check tracking (cron will populate once SO is found)
+    $order->update_meta_data( self::META_INVOICE_STATUS,          'pending' );
+    $order->update_meta_data( self::META_PDF_AVAILABLE,           false );
+    $order->update_meta_data( self::META_INVOICE_CHECK_ATTEMPTS,  0 );
+    $order->update_meta_data( self::META_SALES_ORDER_LOOKUP_ATTEMPTS, 0 );
+    $order->save();
+ 
+    self::transition_lifecycle(
+      $order,
+      'quote_created',
+      sprintf( 'Fincon: Quote %s created.', $quote_no )
+    );
+ 
+    Logger::info( 'Order synced to Fincon as quotation.', [
+      'order_id' => $order_id,
+      'quote_no' => $quote_no,
+    ] );
+ 
+    return $response;
+  }
+ 
+<?php
+/**
+ * OrderSync – prepare_quote_data() replacement
+ *
+ * This is a complete drop-in replacement for the prepare_quote_data()
+ * method introduced in OrderSync.additions.php.
+ *
+ * Changes from the additions file version:
+ *  - 'TotalTax' added to the quote header array.
+ *  - 'LineTotalTax' added to every line item.
+ *
+ * No dealer-pricing recalculation is needed here because the quote payload
+ * builder does not adjust line totals — it uses WooCommerce's figures
+ * directly, so $item->get_total_tax() is always the correct value.
+ *
+ * @author  Elizabeth Meyer <elizabeth@hereandnowdigital.co.za>
+ * @package df-fincon-connector
+ * @since   1.2.0
+ */
+
+  /**
+   * Build the QuotationRecord payload from a WooCommerce order.
+   *
+   * Lossless mapping from the existing sales-order payload:
+   *  • 1:1 fields sent as-is.
+   *  • Sales-order-only fields dropped: OrderType, OrderDate, DateRequired,
+   *    Approved, DeliveryMethod, CardNo – none exist on QuotationRecord.
+   *  • SalesOrderPayment collapsed into Message1 as a single plain-text line.
+   *  • TotalTax sent at header level; LineTotalTax sent per line item.
+   *
+   * @param \WC_Order $order
+   * @return array|\WP_Error
+   * @since 1.2.0
+   */
+  private function prepare_quote_data( \WC_Order $order ): array|\WP_Error {
+    $options = self::get_options();
+
+    if ( empty( $options['order_sync_enabled'] ) )
+      return new \WP_Error( 'order_sync_disabled', 'Order sync is disabled in plugin settings.' );
+
+    // Resolve AccNo – same B2C fallback logic as the sales-order flow
+    $customer_id = $order->get_customer_id();
+    $acc_no      = $customer_id ? get_user_meta( $customer_id, CustomerSync::META_ACCNO, true ) : '';
+
+    if ( empty( $acc_no ) ) {
+      $b2c_account = $options['b2c_debt_account'] ?? '';
+      if ( empty( $b2c_account ) )
+        return new \WP_Error( 'missing_b2c_account', sprintf(
+          'Customer %s does not have a Fincon account number and no B2C debt account is configured.',
+          $customer_id ?: 'Guest'
+        ) );
+      $acc_no = $b2c_account;
+    }
+
+    // ── Header ────────────────────────────────────────────────────────────
+    $quote_data = [
+      'AccNo'        => $acc_no,
+      'LocNo'        => $this->get_order_locno( $order ),
+      'CustomerRef'  => sprintf( 'WC-%d', $order->get_id() ), // max 20 chars – safe
+      'RepCode'      => $this->get_order_repcode( $order ),
+      'CurrencyCode' => self::DEFAULT_CURRENCY,
+      'ExchangeRate' => self::DEFAULT_EXCHANGE_RATE,
+      'TotalTax'     => (float) $order->get_total_tax(),   // ← added
+
+      // Billing address
+      'DebName' => $order->get_billing_company()
+        ?: trim( $order->get_billing_first_name() . ' ' . $order->get_billing_last_name() ),
+      'Addr1'   => $order->get_billing_address_1(),
+      'Addr2'   => $order->get_billing_address_2(),
+      'Addr3'   => $order->get_billing_city(),
+      'PCode'   => $order->get_billing_postcode(),
+      'TaxNo'   => $order->get_meta( '_billing_vat_number' ) ?: '',
+
+      // Delivery address
+      'DelName'     => $order->get_shipping_company()
+        ?: trim( $order->get_shipping_first_name() . ' ' . $order->get_shipping_last_name() ),
+      'DelAddr1'    => $order->get_shipping_address_1(),
+      'DelAddr2'    => $order->get_shipping_address_2(),
+      'DelAddr3'    => $order->get_shipping_city(),
+      'DelAddr4'    => $order->get_shipping_state(),
+      'DelPCode'    => $order->get_shipping_postcode(),
+      // Shipping method label – this is how DeliveryMethod is preserved on
+      // the quote (QuotationRecord has no DeliveryMethod field)
+      'DelInstruc1' => substr( $order->get_shipping_method(), 0, 40 ),
+
+      // Payment summary – replaces SalesOrderPayment block (max 40 chars)
+      'Message1'    => substr( $this->build_payment_summary_line( $order ), 0, 40 ),
+    ];
+
+    // ── Line items ────────────────────────────────────────────────────────
+    $items = [];
+    foreach ( $order->get_items() as $item ) {
+      /** @var \WC_Order_Item_Product $item */
+      $product = $item->get_product();
+      if ( ! $product )
+        continue;
+
+      $sku = $product->get_sku();
+      if ( empty( $sku ) ) {
+        Logger::warning( 'Product missing SKU, skipping quote line item.', [
+          'order_id'   => $order->get_id(),
+          'product_id' => $product->get_id(),
+        ] );
+        continue;
+      }
+
+      $items[] = [
+        'ItemNo'        => $sku,
+        'Quantity'      => (float) $item->get_quantity(),
+        'LineTotalExcl' => (float) $item->get_total(),
+        'LineTotalTax'  => (float) $item->get_total_tax(),   // ← added
+        'Description'   => substr( $product->get_name(), 0, 40 ),
+        'TaxCode'       => self::DEFAULT_TAX_CODE,
+      ];
+    }
+
+    if ( empty( $items ) )
+      return new \WP_Error( 'no_valid_items', 'Order contains no items with valid SKUs.' );
+
+    $quote_data['QuotationDetail'] = $items;
+
+    return $quote_data;
+  }
+
+
+  /**
+   * Build the single-line payment summary that goes into Message1.
+   *
+   * Format: "Payment: Card – R285.00"  or  "Payment: Transfer – R285.00"
+   * This mirrors what the current SalesOrderPayment block conveys – no
+   * gateway name, no transaction ID, no breakdown.
+   *
+   * @param \WC_Order $order
+   * @return string  Plain text, max ~35 chars for typical ZAR amounts.
+   * @since 1.2.0
+   */
+  private function build_payment_summary_line( \WC_Order $order ): string {
+    $payment_method = $order->get_payment_method();
+    $pay_type       = self::PAYMENT_METHOD_MAP[ $payment_method ] ?? 'C';
+    $label          = $pay_type === 'C' ? 'Card' : 'Transfer';
+ 
+    return sprintf(
+      'Payment: %s \u{2013} %s%s',
+      $label,
+      get_woocommerce_currency_symbol(),
+      number_format( (float) $order->get_total(), 2, '.', '' )
+    );
+  }
+
+  /**
+   * Transition the order's Fincon lifecycle state and write a private order
+   * note. Idempotent – does nothing if the state has not changed.
+   *
+   * Call this for every detectable state change so behaviour stays consistent
+   * and order notes are never duplicated.
+   *
+   * @param \WC_Order $order     WooCommerce order.
+   * @param string    $new_state One of the META_LIFECYCLE_STATE values.
+   * @param string    $note_text Private order note text. Empty = no note.
+   * @return bool True if the state actually changed.
+   * @since 1.2.0
+   */
+  public static function transition_lifecycle(
+    \WC_Order $order,
+    string    $new_state,
+    string    $note_text = ''
+  ): bool {
+    $current_state = $order->get_meta( self::META_LIFECYCLE_STATE );
+ 
+    // No-op – critical guard against spamming the notes log
+    if ( $current_state === $new_state )
+      return false;
+ 
+    $history = $order->get_meta( self::META_LIFECYCLE_HISTORY );
+    if ( ! is_array( $history ) )
+      $history = [];
+ 
+    $history[] = [
+      'state'     => $new_state,
+      'timestamp' => current_time( 'mysql' ),
+    ];
+ 
+    $order->update_meta_data( self::META_LIFECYCLE_STATE,   $new_state );
+    $order->update_meta_data( self::META_LIFECYCLE_HISTORY, $history );
+    $order->save();
+ 
+    if ( $note_text !== '' )
+      $order->add_order_note( $note_text, false, false ); // private note
+ 
+    Logger::info( 'Fincon lifecycle transition.', [
+      'order_id' => $order->get_id(),
+      'from'     => $current_state ?: '(none)',
+      'to'       => $new_state,
+    ] );
+ 
+    return true;
+  }
+
+  /**
+   * When a WooCommerce order is cancelled or refunded, expire the linked
+   * Fincon quote – provided it exists and has not yet been converted to a
+   * sales order.
+   *
+   * Hooked to:
+   *   woocommerce_order_status_cancelled
+   *   woocommerce_order_status_refunded
+   *
+   * @param int $order_id WooCommerce order ID.
+   * @return void
+   * @since 1.2.0
+   */
+  public static function expire_quote_on_cancel_or_refund( int $order_id ): void {
+    $order = wc_get_order( $order_id );
+    if ( ! $order )
+      return;
+ 
+    $quote_no = $order->get_meta( self::META_QUOTE_NO );
+    $order_no = $order->get_meta( self::META_ORDER_NO );
+ 
+    // Nothing to do if no quote exists, or it has already become a sales order
+    if ( empty( $quote_no ) || ! empty( $order_no ) )
+      return;
+ 
+    $fincon_api = new FinconApi();
+    $result     = $fincon_api->set_quotation_expired( $quote_no, true );
+ 
+    if ( is_wp_error( $result ) ) {
+      Logger::error( 'Failed to expire Fincon quote on order cancellation/refund.', [
+        'order_id' => $order_id,
+        'quote_no' => $quote_no,
+        'error'    => $result->get_error_message(),
+      ] );
+      // Still write a note so the operator knows manual action may be needed
+      $order->add_order_note(
+        sprintf(
+          'Fincon: Could not expire quote %s automatically – %s. Please expire it manually in Fincon.',
+          $quote_no,
+          $result->get_error_message()
+        ),
+        false,
+        false
+      );
+      return;
+    }
+ 
+    self::transition_lifecycle(
+      $order,
+      'quote_expired',
+      sprintf( 'Fincon: Quote %s expired (order cancelled/refunded).', $quote_no )
+    );
+ 
+    Logger::info( 'Fincon quote expired on order cancellation/refund.', [
+      'order_id' => $order_id,
+      'quote_no' => $quote_no,
+    ] );
   }
 
 }

@@ -72,7 +72,9 @@ class CustomerSync {
       'customer_batch_size' => 100,
       'customer_import_only_changed' => 0,
       'customer_weblist_only' => 1,
-      // New cron settings
+      'customer_cron_log_enabled' => 0,
+      'customer_cron_log_verbose' => 0,
+      // Cron settings
       'customer_sync_schedule_enabled' => 0,
       'customer_sync_schedule_frequency' => 'daily',
       'customer_sync_schedule_time' => '23:00',
@@ -613,4 +615,3 @@ class CustomerSync {
 
 
 }
-

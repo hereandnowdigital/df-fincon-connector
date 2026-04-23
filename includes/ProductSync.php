@@ -323,10 +323,11 @@ class ProductSync {
           $skipped_count++;
           $errors[] = __('Skipped item - missing ItemNo');
           
-          // Log skipped product if cron logging is enabled
+          // Log skipped product if verbose cron logging is enabled
           try {
             $cron_logger = ProductCronLogger::create();
-            if ( $cron_logger->is_enabled() ) {
+            $log_options = self::get_options();
+            if ( $cron_logger->is_enabled() && ! empty( $log_options['product_cron_log_verbose'] ) ) {
               $cron_logger->log_product( $item_no, 0, 'skipped', 'missing ItemNo' );
             }
           } catch ( \Exception $e ) {
@@ -336,16 +337,16 @@ class ProductSync {
           continue;
         }
 
-
         if ( strtoupper(trim($item_active)) !== 'Y' ) {
           $skipped_count++;
           $errors[] = __('Skipped item - item not Active on Fincon');
           
-          // Log skipped product if cron logging is enabled
+          // Log skipped product if verbose cron logging is enabled
           try {
             $cron_logger = ProductCronLogger::create();
-            if ( $cron_logger->is_enabled() ) {
-              $cron_logger->log_product( $item_no, 0, 'skipped', 'missing ItemNo' );
+            $log_options = self::get_options();
+            if ( $cron_logger->is_enabled() && ! empty( $log_options['product_cron_log_verbose'] ) ) {
+              $cron_logger->log_product( $item_no, 0, 'skipped', 'not Active on Fincon' );
             }
           } catch ( \Exception $e ) {
             // Silently fail logging to not disrupt import
@@ -369,10 +370,11 @@ class ProductSync {
           
           $imported_count++;
 
-          // Log product import result if cron logging is enabled
+          // Log product import result if verbose cron logging is enabled
           try {
             $cron_logger = ProductCronLogger::create();
-            if ( $cron_logger->is_enabled() ) {
+            $log_options = self::get_options();
+            if ( $cron_logger->is_enabled() && ! empty( $log_options['product_cron_log_verbose'] ) ) {
               $status_label = match( $status ) {
                 self::PROD_STATUS_CREATE => 'created',
                 self::PROD_STATUS_UPDATE => 'updated',
@@ -390,10 +392,11 @@ class ProductSync {
             $error_message = sprintf( 'Failed to import Item %s (%s): %s', $item_no, $item_desc, $e->getMessage() );
             $errors[] = $error_message;
             
-            // Log failed product if cron logging is enabled
+            // Log failed product if verbose cron logging is enabled
             try {
               $cron_logger = ProductCronLogger::create();
-              if ( $cron_logger->is_enabled() ) {
+              $log_options = self::get_options();
+              if ( $cron_logger->is_enabled() && ! empty( $log_options['product_cron_log_verbose'] ) ) {
                 $cron_logger->log_product( $item_no, 0, 'failed', $e->getMessage() );
               }
             } catch ( \Exception $log_e ) {

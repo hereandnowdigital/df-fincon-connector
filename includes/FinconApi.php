@@ -722,6 +722,125 @@ class FinconApi {
     return $result;
   }
 
+ /**
+   * Create a quotation in Fincon.
+   *
+   * API function : "CreateQuotation"
+   * Method       : POST
+   * Path params  : ConnectID
+   * Body         : {QuotationRecord, "QuotationDetail":[{QuotationDetailRecord}],
+   *                 "GroupDetail":[{GroupDescriptionRecord}]}
+   *
+   * QuoteNo, Status and UnitCost are read-only on the Fincon side.
+   * QuoteDate is always set to today by Fincon – do not send it.
+   * Only local-currency debtor accounts are allowed (max 1 000 detail lines).
+   *
+   * @param array $quote_data  Associative array matching QuotationRecord +
+   *                           "QuotationDetail" key containing line items.
+   * @return array|\WP_Error   API response with QuotationInfo or WP_Error.
+   * @since 1.2.0
+   */
+  public function create_quotation( array $quote_data ): array|\WP_Error {
+    $function    = 'CreateQuotation';
+    $query_params = []; // ConnectID is injected by send_request() / build_path()
+ 
+    $result = $this->post_request( $function, $query_params, $quote_data );
+ 
+    if ( is_wp_error( $result ) )
+      return $result;
+ 
+    if ( ! isset( $result['QuotationInfo'] ) || empty( $result['QuotationInfo'] ) )
+      return new \WP_Error(
+        'fincon_quotation_parse_error',
+        __( 'Fincon API returned quotation data in an unexpected format.', 'df-fincon' ),
+        [ 'raw_response' => $result ]
+      );
+ 
+    return $result;
+  }
+ 
+  /**
+   * Expire (or reactivate) a Fincon quotation.
+   *
+   * API function : "SetQuotationExpired"
+   * Method       : POST / GET
+   * Path params  : ConnectID / QuoteNo / Expired
+   *
+   * Set $expired = true  → status changes to Expired.
+   * Set $expired = false → status changes back to Active.
+   *
+   * @param string $quote_no  Fincon quotation number (e.g. "Q-00125").
+   * @param bool   $expired   True to expire, false to reactivate. Default true.
+   * @return array|\WP_Error  Response containing QuotationExpiredResultRecord or WP_Error.
+   * @since 1.2.0
+   */
+  public function set_quotation_expired( string $quote_no, bool $expired = true ): array|\WP_Error {
+    $function     = 'SetQuotationExpired';
+    // API path: .../SetQuotationExpired/ConnectID/QuoteNo/Expired/
+    $query_params = [
+      $quote_no,
+      $expired ? 'true' : 'false',
+    ];
+ 
+    $result = $this->post_request( $function, $query_params, [] );
+ 
+    if ( is_wp_error( $result ) )
+      return $result;
+ 
+    return $result;
+  }
+ 
+  /**
+   * Retrieve sales orders for a debtor account – used to resolve a stored
+   * QuoteNo to the sales order the Fincon team created from it.
+   *
+   * API function : "GetSalesOrdersByAccNo"
+   * Method       : GET
+   * Path params  : ConnectID / MinAccNo / MaxAccNo / LocNo /
+   *                OutstandingOnly / ListTransactions / RecNo / Count
+   *
+   * NOTE: OutstandingOnly is intentionally set to FALSE here so that orders
+   * which have already been invoiced (and are therefore no longer
+   * "outstanding") are still returned. This prevents a timing gap where the
+   * cron misses a rapid quote→order→invoice sequence.
+   *
+   * @param string $acc_no   Debtor account number.
+   * @param string $loc_no   Stock location filter. '' = all locations.
+   * @param int    $count    Max records to return. Default 100.
+   * @return array|\WP_Error API response with SalesOrders array or WP_Error.
+   * @since 1.2.0
+   */
+  public function get_sales_orders_by_acc_no(
+    string $acc_no,
+    string $loc_no  = '',
+    int    $count   = 100
+  ): array|\WP_Error {
+    $function     = 'GetSalesOrdersByAccNo';
+    $query_params = [
+      $acc_no,    // MinAccNo
+      $acc_no,    // MaxAccNo
+      $loc_no,    // LocNo  ('' = all)
+      'false',    // OutstandingOnly – FALSE so invoiced orders remain visible
+      'false',    // ListTransactions – detail lines not needed for matching
+      '0',        // RecNo
+      (string) $count,
+    ];
+ 
+    $result = $this->get_request( $function, $query_params );
+ 
+    if ( is_wp_error( $result ) )
+      return $result;
+ 
+    if ( ! isset( $result['SalesOrders'] ) )
+      return new \WP_Error(
+        'fincon_sales_orders_parse_error',
+        __( 'Fincon API returned sales orders in an unexpected format.', 'df-fincon' ),
+        [ 'raw_response' => $result ]
+      );
+ 
+    return $result;
+  }
+
   /**
    * Get PDF document from Fincon
    * API function: "GetDocumentPdf"

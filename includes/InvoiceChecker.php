@@ -95,6 +95,9 @@ class InvoiceChecker {
     add_action( 'wp_ajax_df_fincon_bulk_check_invoices_batch', [ $this, 'ajax_bulk_check_invoices_batch' ] );
     add_action( 'wp_ajax_df_fincon_schedule_invoice_check', [ $this, 'ajax_schedule_invoice_check' ] );
     add_action( 'wp_ajax_df_fincon_unschedule_invoice_check', [ $this, 'ajax_unschedule_invoice_check' ] );
+
+    add_action( 'wp_ajax_df_fincon_rescan_sales_order', [ $this, 'ajax_rescan_sales_order' ] );
+
   }
 
   /**
@@ -327,7 +330,7 @@ class InvoiceChecker {
         $order->update_meta_data( OrderSync::META_INVOICE_NUMBERS, $invoice_numbers );
         $result['status_changed'] = true;
       }
-      
+
       // Determine invoice status
       $invoice_numbers_array = array_map( 'trim', explode( ',', $invoice_numbers ) );
       if ( count( $invoice_numbers_array ) > 1 ) {
@@ -335,36 +338,48 @@ class InvoiceChecker {
       } else {
         $new_status = 'available';
       }
-      
+
       if ( $current_status !== $new_status ) {
         $order->update_meta_data( OrderSync::META_INVOICE_STATUS, $new_status );
         $order->update_meta_data( OrderSync::META_PDF_AVAILABLE, true );
         $result['status_changed'] = true;
         $result['new_status'] = $new_status;
       }
-      
-      // Add order note about invoice availability
-      if ( $result['status_changed'] ) {
-        $note = sprintf(
-          __( 'Fincon invoice(s) now available: %s', 'df-fincon' ),
-          $invoice_numbers
+
+      // Lifecycle: sales order approved
+      // $sales_order_info is already resolved above from the API response
+      $so_approved = trim( $sales_order_info['Approved'] ?? 'N' );
+      if ( $so_approved === 'Y' ) {
+        OrderSync::transition_lifecycle(
+          $order,
+          'sales_order_approved',
+          'Fincon: Sales order approved.'
         );
-        $order->add_order_note( $note, false, false );
       }
+
+      // Lifecycle: invoice created (only write note on first detection)
+      if ( $result['status_changed'] ) {
+        $first_inv = trim( $invoice_numbers_array[0] );
+        OrderSync::transition_lifecycle(
+          $order,
+          'invoice_created',
+          sprintf( 'Fincon: Invoice %s generated. PDF available.', $first_inv )
+        );
+      }
+
     } else {
       // Still no invoice numbers
       if ( $check_attempts >= self::MAX_CHECK_ATTEMPTS ) {
-        // Max attempts reached, mark as error
         $order->update_meta_data( OrderSync::META_INVOICE_STATUS, 'error' );
         $order->update_meta_data( OrderSync::META_PDF_AVAILABLE, false );
-        
+
         $note = sprintf(
           __( 'Invoice check failed after %d attempts. Manual intervention required.', 'df-fincon' ),
           $check_attempts
         );
         $order->add_order_note( $note, false, false );
-        
-        $result['new_status'] = 'error';
+
+        $result['new_status']     = 'error';
         $result['status_changed'] = true;
       }
     }
@@ -426,7 +441,7 @@ class InvoiceChecker {
       );
       $order->add_order_note( $note, false, false );
     }
-    
+
     Logger::info( 'Invoice PDF fetch completed', [
       'order_id' => $order_id,
       'invoice_numbers' => $invoice_numbers,
@@ -434,6 +449,12 @@ class InvoiceChecker {
       'failed' => count( $result['failed'] ?? [] ),
     ] );
     
+    OrderSync::transition_lifecycle(
+      $order,
+      'invoice_downloaded',
+      'Fincon: Invoice PDF downloaded and attached to order.'
+    );
+
     return $result;
   }
 
@@ -469,6 +490,12 @@ class InvoiceChecker {
     ];
     
     foreach ( $order_ids as $order_id ) {
+      $order_obj = wc_get_order( $order_id );
+      if ( $order_obj ) {
+        $this->resolve_quote_to_sales_order( $order_obj );
+        // Reload after potential save in resolver
+        $order_obj = wc_get_order( $order_id );
+      }
       try {
         // Check invoice status
         $check_result = $this->check_invoice_status( $order_id );
@@ -879,4 +906,249 @@ class InvoiceChecker {
       'message' => __( 'Invoice check unscheduled successfully.', 'df-fincon' ),
     ] );
   }
+
+ /**
+   * Check whether a Fincon quote has been converted to a sales order by the
+   * Fincon sales team, and if so persist the sales order number and advance
+   * the lifecycle state.
+   *
+   * This runs inside the existing cron loop BEFORE the invoice-polling step.
+   * Once META_ORDER_NO is populated, the existing invoice logic takes over
+   * unchanged.
+   *
+   * @param \WC_Order $order The WooCommerce order to check.
+   * @return void
+   * @since 1.2.0
+   */
+  public function resolve_quote_to_sales_order( \WC_Order $order ): void {
+    $quote_no = $order->get_meta( OrderSync::META_QUOTE_NO );
+    $order_no = $order->get_meta( OrderSync::META_ORDER_NO );
+ 
+    // Skip: no quote on this order, or we already have the sales order number
+    if ( empty( $quote_no ) || ! empty( $order_no ) )
+      return;
+ 
+    // Enforce the poll-attempt cap to avoid hammering the API indefinitely
+    $attempts = (int) $order->get_meta( OrderSync::META_SALES_ORDER_LOOKUP_ATTEMPTS );
+ 
+    if ( $attempts >= OrderSync::MAX_SALES_ORDER_LOOKUP_ATTEMPTS ) {
+      // Cap reached – stop polling. The meta-box "Re-scan" button resets this.
+      Logger::debug( 'Sales order lookup attempt cap reached – waiting for manual re-scan.', [
+        'order_id' => $order->get_id(),
+        'quote_no' => $quote_no,
+        'attempts' => $attempts,
+      ] );
+ 
+      // Write a once-only note when the cap is first hit
+      $lifecycle_state = $order->get_meta( OrderSync::META_LIFECYCLE_STATE );
+      if ( $lifecycle_state === 'quote_created' ) {
+        OrderSync::transition_lifecycle(
+          $order,
+          'quote_created', // stay in same state – transition() is idempotent, so we
+                           // manually add a note without changing state
+        );
+        // Add a one-time cap note directly
+        $last_cap_note = $order->get_meta( '_fincon_sales_order_cap_noted' );
+        if ( empty( $last_cap_note ) ) {
+          $order->add_order_note(
+            sprintf(
+              'Fincon: Stopped polling for sales order after %d attempts. Use "Re-scan for Sales Order" button to retry.',
+              $attempts
+            ),
+            false,
+            false
+          );
+          $order->update_meta_data( '_fincon_sales_order_cap_noted', current_time( 'mysql' ) );
+          $order->save();
+        }
+      }
+      return;
+    }
+ 
+    // Increment attempt counter before the API call
+    $order->update_meta_data( OrderSync::META_SALES_ORDER_LOOKUP_ATTEMPTS, $attempts + 1 );
+    $order->save();
+ 
+    // Resolve the AccNo we used when creating the quote
+    $acc_no = $this->resolve_order_acc_no( $order );
+    if ( empty( $acc_no ) ) {
+      Logger::warning( 'Cannot resolve AccNo for sales order lookup.', [
+        'order_id' => $order->get_id(),
+        'quote_no' => $quote_no,
+      ] );
+      return;
+    }
+ 
+    $fincon_api = new FinconApi();
+    $response   = $fincon_api->get_sales_orders_by_acc_no( $acc_no );
+ 
+    if ( is_wp_error( $response ) ) {
+      Logger::warning( 'Sales order lookup API call failed.', [
+        'order_id' => $order->get_id(),
+        'quote_no' => $quote_no,
+        'error'    => $response->get_error_message(),
+      ] );
+      return;
+    }
+ 
+    // Search for a sales order that references our quote number or our WC order ID
+    $wc_customer_ref = sprintf( 'WC-%d', $order->get_id() );
+    $matched         = null;
+ 
+    foreach ( $response['SalesOrders'] ?? [] as $so ) {
+      $so_quote_no    = trim( $so['QuoteNo']      ?? '' );
+      $so_cust_ref    = trim( $so['CustomerRef']  ?? '' );
+ 
+      if ( $so_quote_no === $quote_no || $so_cust_ref === $wc_customer_ref ) {
+        $matched = $so;
+        break;
+      }
+    }
+ 
+    if ( ! $matched ) {
+      Logger::debug( 'No matching sales order found for quote yet.', [
+        'order_id'    => $order->get_id(),
+        'quote_no'    => $quote_no,
+        'acc_no'      => $acc_no,
+        'so_count'    => count( $response['SalesOrders'] ?? [] ),
+      ] );
+      return; // Try again on the next cron tick
+    }
+ 
+    $found_order_no = trim( $matched['OrderNo']  ?? '' );
+    $is_approved    = ( trim( $matched['Approved'] ?? 'N' ) ) === 'Y';
+    $invoice_nos    = trim( $matched['InvoiceNumbers'] ?? '' );
+ 
+    if ( empty( $found_order_no ) ) {
+      Logger::warning( 'Matched sales order has empty OrderNo – skipping.', [
+        'order_id' => $order->get_id(),
+        'quote_no' => $quote_no,
+      ] );
+      return;
+    }
+ 
+    // Persist the linked sales order number
+    $order->update_meta_data( OrderSync::META_ORDER_NO, $found_order_no );
+    $order->save();
+ 
+    OrderSync::transition_lifecycle(
+      $order,
+      'sales_order_created',
+      sprintf(
+        'Fincon: Sales order %s created (linked to quote %s).',
+        $found_order_no,
+        $quote_no
+      )
+    );
+ 
+    Logger::info( 'Sales order resolved from quote.', [
+      'order_id'       => $order->get_id(),
+      'quote_no'       => $quote_no,
+      'found_order_no' => $found_order_no,
+      'is_approved'    => $is_approved,
+    ] );
+ 
+    // Advance to approved if already approved at time of discovery
+    if ( $is_approved ) {
+      OrderSync::transition_lifecycle(
+        $order,
+        'sales_order_approved',
+        'Fincon: Sales order approved.'
+      );
+    }
+ 
+    // If invoice numbers are already populated, advance that state too
+    if ( ! empty( $invoice_nos ) ) {
+      $order->update_meta_data( OrderSync::META_INVOICE_NUMBERS, $invoice_nos );
+      $order->update_meta_data( OrderSync::META_INVOICE_STATUS,  'available' );
+      $order->save();
+ 
+      $first_inv = explode( ',', $invoice_nos )[0];
+      OrderSync::transition_lifecycle(
+        $order,
+        'invoice_created',
+        sprintf( 'Fincon: Invoice %s generated.', trim( $first_inv ) )
+      );
+    }
+  }
+
+ /**
+   * Return the AccNo used when creating the quote, falling back to the
+   * configured B2C debt account for guest / retail orders.
+   *
+   * @param \WC_Order $order
+   * @return string AccNo, or empty string if not determinable.
+   * @since 1.2.0
+   */
+  private function resolve_order_acc_no( \WC_Order $order ): string {
+    $customer_id = $order->get_customer_id();
+    $acc_no      = $customer_id
+      ? (string) get_user_meta( $customer_id, CustomerSync::META_ACCNO, true )
+      : '';
+ 
+    if ( ! empty( $acc_no ) )
+      return $acc_no;
+ 
+    $options = OrderSync::get_options();
+    return (string) ( $options['b2c_debt_account'] ?? '' );
+  }
+
+ /**
+   * AJAX endpoint: Re-scan a single order for its linked sales order.
+   *
+   * Resets the attempt counter so the resolver will try again immediately,
+   * regardless of whether the cap was previously reached.
+   *
+   * Action : df_fincon_rescan_sales_order
+   * Nonce  : df_fincon_rescan_sales_order_{order_id}
+   *
+   * @return void
+   * @since 1.2.0
+   */
+  public function ajax_rescan_sales_order(): void {
+    if ( ! current_user_can( 'manage_woocommerce' ) )
+      wp_die( -1 );
+ 
+    $order_id = absint( $_POST['order_id'] ?? 0 );
+    $nonce    = sanitize_text_field( $_POST['nonce'] ?? '' );
+ 
+    if ( ! $order_id || ! wp_verify_nonce( $nonce, 'df_fincon_rescan_sales_order_' . $order_id ) ) {
+      wp_send_json_error( [ 'message' => __( 'Invalid request.', 'df-fincon' ) ] );
+      return;
+    }
+ 
+    $order = wc_get_order( $order_id );
+    if ( ! $order ) {
+      wp_send_json_error( [ 'message' => __( 'Order not found.', 'df-fincon' ) ] );
+      return;
+    }
+ 
+    // Reset the cap so the resolver will run
+    $order->update_meta_data( OrderSync::META_SALES_ORDER_LOOKUP_ATTEMPTS, 0 );
+    $order->delete_meta_data( '_fincon_sales_order_cap_noted' );
+    $order->save();
+ 
+    // Run the resolver immediately
+    $this->resolve_quote_to_sales_order( $order );
+ 
+    // Reload to get latest meta
+    $order = wc_get_order( $order_id );
+    $found_order_no = $order->get_meta( OrderSync::META_ORDER_NO );
+ 
+    if ( ! empty( $found_order_no ) ) {
+      wp_send_json_success( [
+        'message'  => sprintf(
+          __( 'Sales order %s found and linked.', 'df-fincon' ),
+          $found_order_no
+        ),
+        'order_no' => $found_order_no,
+      ] );
+    } else {
+      wp_send_json_success( [
+        'message'  => __( 'Re-scan complete – no matching sales order found in Fincon yet.', 'df-fincon' ),
+        'order_no' => '',
+      ] );
+    }
+  }
+
 }

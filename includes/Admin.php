@@ -149,6 +149,15 @@ class Admin {
       [ __CLASS__,'render_cron_log_products_page' ]
     );
 
+    add_submenu_page(
+      'df-fincon-settings',
+      __( 'Customer Sync Log', 'df-fincon' ),
+      __( 'Customer Sync Log', 'df-fincon' ),
+      'manage_woocommerce',
+      'df-fincon-cron-log-customers',
+      [ __CLASS__,'render_cron_log_customers_page' ]
+    );
+
   }
 
   public static function register_settings_api(): void {
@@ -195,6 +204,7 @@ class Admin {
         'import_update_only_changed' => __( 'Update only changed products', 'df-fincon' ),
         'import_web_only' => __( 'Web Only', 'df-fincon' ),
         'product_cron_log_enabled' => __( 'Enable product cron log', 'df-fincon' ),
+        'product_cron_log_verbose' => __( 'Log each product individually (verbose)', 'df-fincon' ),
     ];
 
     foreach ( $import_fields as $id => $label )
@@ -251,6 +261,8 @@ class Admin {
       'customer_batch_size' => __( 'Batch Size', 'df-fincon' ),
       'customer_import_only_changed' => __( 'Import only customers updated on Fincon since the last customer import', 'df-fincon' ),
       'customer_weblist_only' => __( 'WebList only', 'df-fincon' ),
+      'customer_cron_log_enabled' => __( 'Enable customer sync log', 'df-fincon' ),
+      'customer_cron_log_verbose' => __( 'Log each customer individually (verbose)', 'df-fincon' ),
     ];
 
     foreach ( $fields as $id => $label )
@@ -326,6 +338,14 @@ class Admin {
       self::OPTIONS_NAME_ORDERS,
       self::OPTIONS_NAME
     );
+
+    add_settings_field(
+      'order_creation_mode',
+      __( 'Order Creation Mode', 'df-fincon' ),
+      [ __CLASS__, 'render_order_creation_mode_field' ],
+      self::OPTIONS_NAME_ORDERS,
+      self::OPTIONS_NAME
+    );
   }
 
   public static function render_field( array $args ): void {
@@ -349,8 +369,11 @@ class Admin {
       'import_update_only_changed' => 'checkbox',
       'import_web_only' => 'checkbox',
       'product_cron_log_enabled' => 'checkbox',
+      'product_cron_log_verbose' => 'checkbox',
       'customer_import_only_changed' => 'checkbox',
       'customer_weblist_only' => 'checkbox',
+      'customer_cron_log_enabled' => 'checkbox',
+      'customer_cron_log_verbose' => 'checkbox',
       'order_sync_enabled' => 'checkbox',
       'order_sync_status_processing' => 'checkbox',
       'order_sync_status_completed' => 'checkbox',
@@ -553,6 +576,7 @@ class Admin {
     $sanitized['import_update_only_changed'] = isset( $input['import_update_only_changed'] ) ? 1 : 0;
     $sanitized['import_web_only'] = isset( $input['import_web_only'] ) ? 1 : 0;
     $sanitized['product_cron_log_enabled'] = isset( $input['product_cron_log_enabled'] ) ? 1 : 0;
+    $sanitized['product_cron_log_verbose'] = isset( $input['product_cron_log_verbose'] ) ? 1 : 0;
 
     // Reinitialize cron schedule if enabled
     if ( $sanitized['sync_schedule_enabled'] ) {
@@ -580,6 +604,8 @@ class Admin {
     $sanitized['customer_batch_size'] = isset( $input['customer_batch_size'] ) ? absint( $input['customer_batch_size'] ) : 100;
     $sanitized['customer_import_only_changed'] = isset( $input['customer_import_only_changed'] ) ? 1 : 0;
     $sanitized['customer_weblist_only'] = isset( $input['customer_weblist_only'] ) ? 1 : 0;
+    $sanitized['customer_cron_log_enabled'] = isset( $input['customer_cron_log_enabled'] ) ? 1 : 0;
+    $sanitized['customer_cron_log_verbose'] = isset( $input['customer_cron_log_verbose'] ) ? 1 : 0;
     
     // New cron settings
     $sanitized['customer_sync_schedule_enabled'] = isset( $input['customer_sync_schedule_enabled'] ) ? 1 : 0;
@@ -653,6 +679,12 @@ class Admin {
     $sanitized['order_sync_status_processing'] = isset( $input['order_sync_status_processing'] ) ? 1 : 0;
     $sanitized['order_sync_status_completed'] = isset( $input['order_sync_status_completed'] ) ? 1 : 0;
     
+    $allowed_modes = [ 'sales_order', 'quotation' ];
+    $sanitized['order_creation_mode'] = isset( $input['order_creation_mode'] )
+    && in_array( $input['order_creation_mode'], $allowed_modes, true )
+    ? $input['order_creation_mode']
+    : 'sales_order'; // always default to existing behaviour
+
     return $sanitized;
   }
 
@@ -750,6 +782,85 @@ class Admin {
     
     // Pass logs to template
     require_once self::TEMPLATE_PATH . 'cron-log.php';
+  }
+
+  public static function render_cron_log_customers_page(): void {
+    // Handle file deletion action
+    if ( isset( $_GET['action'] ) && $_GET['action'] === 'delete_log' && isset( $_GET['file'] ) && isset( $_GET['_wpnonce'] ) ) {
+      if ( wp_verify_nonce( $_GET['_wpnonce'], 'delete_customer_cron_log' ) ) {
+        $cron_logger = CustomerCronLogger::create();
+        $file_name = sanitize_text_field( $_GET['file'] );
+        $deleted = $cron_logger->delete_log_file( $file_name );
+
+        if ( $deleted ) {
+          add_settings_error(
+            'df_fincon_cron_log_customers',
+            'log_deleted',
+            sprintf( __( 'Log file "%s" deleted successfully.', 'df-fincon' ), $file_name ),
+            'success'
+          );
+        } else {
+          add_settings_error(
+            'df_fincon_cron_log_customers',
+            'log_delete_failed',
+            sprintf( __( 'Failed to delete log file "%s".', 'df-fincon' ), $file_name ),
+            'error'
+          );
+        }
+
+        wp_safe_redirect( remove_query_arg( [ 'action', 'file', '_wpnonce' ] ) );
+        exit;
+      }
+    }
+
+    // Handle clear all logs action
+    if ( isset( $_GET['action'] ) && $_GET['action'] === 'clear_all_logs' && isset( $_GET['_wpnonce'] ) ) {
+      if ( wp_verify_nonce( $_GET['_wpnonce'], 'clear_all_customer_cron_logs' ) ) {
+        $cron_logger = CustomerCronLogger::create();
+        $results = $cron_logger->delete_all_log_files();
+
+        if ( ! empty( $results['deleted'] ) ) {
+          add_settings_error(
+            'df_fincon_cron_log_customers',
+            'logs_cleared',
+            sprintf( __( 'Deleted %d log file(s).', 'df-fincon' ), count( $results['deleted'] ) ),
+            'success'
+          );
+        }
+
+        if ( ! empty( $results['errors'] ) ) {
+          add_settings_error(
+            'df_fincon_cron_log_customers',
+            'logs_clear_errors',
+            sprintf( __( 'Failed to delete %d log file(s).', 'df-fincon' ), count( $results['errors'] ) ),
+            'error'
+          );
+        }
+
+        wp_safe_redirect( remove_query_arg( [ 'action', '_wpnonce' ] ) );
+        exit;
+      }
+    }
+
+    // Get log files
+    $cron_logger = CustomerCronLogger::create();
+    $log_files = $cron_logger->get_log_files();
+
+    // Get current log file content if viewing
+    $current_log_content = '';
+    $current_log_file = '';
+
+    if ( isset( $_GET['view'] ) && ! empty( $_GET['view'] ) ) {
+      $file_name = sanitize_text_field( $_GET['view'] );
+      $current_log_content = $cron_logger->read_log_file( $file_name );
+      $current_log_file = $file_name;
+    }
+
+    // Check if logging is enabled
+    $logging_enabled = $cron_logger->is_enabled();
+
+    // Pass data to template
+    require_once self::TEMPLATE_PATH . 'cron-log-customers.php';
   }
 
   public static function render_cron_log_products_page(): void {
@@ -1244,4 +1355,38 @@ class Admin {
       wp_send_json_success( [ 'message' => __( 'Location status updated successfully', 'df-fincon' ) ] );
     }
   }
+
+ /**
+   * Render the "Order Creation Mode" select field.
+   *
+   * Defaults to 'sales_order' so no existing behaviour changes on upgrade.
+   *
+   * @return void
+   * @since 1.2.0
+   */
+  public static function render_order_creation_mode_field(): void {
+    $options = OrderSync::get_options();
+    $value   = $options['order_creation_mode'] ?? 'sales_order';
+    ?>
+    <select id="order_creation_mode"
+            name="<?php echo esc_attr( self::OPTIONS_NAME_ORDERS ); ?>[order_creation_mode]">
+ 
+      <option value="sales_order" <?php selected( $value, 'sales_order' ); ?>>
+        <?php esc_html_e( 'Sales Order (current behaviour – reserves stock immediately)', 'df-fincon' ); ?>
+      </option>
+ 
+      <option value="quotation" <?php selected( $value, 'quotation' ); ?>>
+        <?php esc_html_e( 'Quotation (does not reserve stock – Fincon team converts manually)', 'df-fincon' ); ?>
+      </option>
+ 
+    </select>
+    <p class="description">
+      <?php esc_html_e(
+        'In Quotation mode every checkout creates a quote in Fincon. The Fincon sales team reviews the quote, converts it to a sales order, approves it and invoices from within Fincon. The customer experience is unchanged.',
+        'df-fincon'
+      ); ?>
+    </p>
+    <?php
+  }
+
 }

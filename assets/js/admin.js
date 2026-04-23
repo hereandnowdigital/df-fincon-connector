@@ -372,4 +372,150 @@ jQuery(document).ready(function($) {
 
   })(); // End of Manual Product Import Tab IIFE
 
+  // Manual Customer Import Tab
+  (function() {
+
+    // Single customer import handler
+    $('#df-fincon-customer-import-btn').on('click', function(e) {
+      e.preventDefault();
+      var $button = $(this);
+      var originalText = $button.text();
+      var $feedback = $('#df-fincon-customer-import-feedback');
+      var $inlineFeedback = $('#df-fincon-customer-single-feedback');
+      var customerAccno = $('#df_fincon_customer_accno').val();
+
+      if (!customerAccno || customerAccno.trim() === '') {
+        $inlineFeedback.html('<span style="color:#B32D2E;">Please enter a customer account number.</span>');
+        return;
+      }
+
+      $inlineFeedback.html('<span style="color:#0073AA;">Importing customer...</span>');
+      $feedback.removeClass('success error').html('<p>' + DF_FINCON_ADMIN.messages.importing + '...</p>');
+      $button.prop('disabled', true).text(DF_FINCON_ADMIN.messages.importing);
+
+      $.post(DF_FINCON_ADMIN.ajax_url, {
+        action: 'df_fincon_manual_import_customers',
+        nonce: DF_FINCON_ADMIN.nonces.import,
+        customer_accno: customerAccno,
+        count: 0,
+      })
+      .done(function(response) {
+        if (response.success) {
+          var data = response.data.data || {};
+          var html = '<div class="notice notice-success is-dismissible"><p><strong>✅ ' + response.data.message + '</strong></p></div>';
+
+          html += '<table class="wp-list-table widefat fixed striped">';
+          html += '<thead><tr><th colspan="2">Single Customer Import Summary</th></tr></thead>';
+          html += '<tbody>';
+          html += '<tr><th>Account Number</th><td>' + customerAccno + '</td></tr>';
+          html += '<tr><th>Status</th><td>' + ((data.imported_count || data.total_processed) ? 'Imported successfully' : 'Skipped/not found') + '</td></tr>';
+          if (data.errors && data.errors.length > 0) {
+            html += '<tr><th>Errors</th><td><ul>';
+            data.errors.forEach(function(error) {
+              html += '<li>' + error + '</li>';
+            });
+            html += '</ul></td></tr>';
+          }
+          html += '</tbody></table>';
+
+          $feedback.addClass('success').html(html);
+          $inlineFeedback.html('<span style="color:#22A300;">Import completed.</span>');
+        } else {
+          var errorMessage = response.data.message || DF_FINCON_ADMIN.messages.import_failed;
+          var errorDetails = JSON.stringify(response.data.data, null, 2) || 'No further details provided.';
+          $feedback.addClass('error').html('<p>❌ ' + errorMessage + '</p><pre>' + errorDetails + '</pre>');
+          $inlineFeedback.html('<span style="color:#B32D2E;">Import failed.</span>');
+        }
+      })
+      .fail(function(xhr) {
+        $feedback.addClass('error').html('<p>❌ ' + DF_FINCON_ADMIN.messages.network_error + ' (HTTP Status: ' + xhr.status + ')</p>');
+        $inlineFeedback.html('<span style="color:#B32D2E;">Network error.</span>');
+      })
+      .always(function() {
+        $button.prop('disabled', false).text(originalText);
+      });
+    });
+
+    // Batch customer import handler
+    $('#df-fincon-customer-batch-import-btn').on('click', function(e) {
+      e.preventDefault();
+      var $button = $(this);
+      var originalText = $button.text();
+      var $feedback = $('#df-fincon-customer-import-feedback');
+      var $inlineFeedback = $('#df-fincon-customer-batch-feedback');
+      var count = parseInt($('#df_fincon_customer_import_count').val(), 10) || 50;
+      var onlyChanged = $('#df_fincon_customer_only_changed').is(':checked') ? 1 : 0;
+      var weblistOnly = $('#df_fincon_customer_weblist_only').is(':checked') ? 1 : 0;
+
+      $inlineFeedback.html('<span style="color:#0073AA;">Starting batch customer import...</span>');
+      $feedback.removeClass('success error').html('<p>' + DF_FINCON_ADMIN.messages.importing + '...</p>');
+      $button.prop('disabled', true).text(DF_FINCON_ADMIN.messages.importing);
+
+      function processBatch(offset) {
+        $.post(DF_FINCON_ADMIN.ajax_url, {
+          action: 'df_fincon_manual_import_customers',
+          nonce: DF_FINCON_ADMIN.nonces.import,
+          count: count,
+          offset: offset || 0,
+          only_changed: onlyChanged,
+          webListOnly: weblistOnly,
+        })
+        .done(function(response) {
+          if (response.success) {
+            var data = response.data.data || {};
+            var totalProcessed = data.total_processed || data.imported_count || 0;
+
+            $inlineFeedback.html('<span style="color:#0073AA;">Processing... ' + totalProcessed + ' customers imported so far</span>');
+
+            // If the response signals more records to fetch, continue
+            if (data.has_more === true && data.next_offset != null) {
+              setTimeout(function() {
+                processBatch(data.next_offset);
+              }, 500);
+            } else {
+              // Import complete — show summary
+              var html = '<div class="notice notice-success is-dismissible"><p><strong>✅ ' + response.data.message + '</strong></p></div>';
+
+              html += '<table class="wp-list-table widefat fixed striped">';
+              html += '<thead><tr><th colspan="2">Customer Import Summary</th></tr></thead>';
+              html += '<tbody>';
+              html += '<tr><th>Successfully imported</th><td>' + (data.imported_count || 0) + '</td></tr>';
+              html += '<tr><th>Skipped/failed</th><td>' + (data.skipped_count || 0) + '</td></tr>';
+              if (data.total_processed) {
+                html += '<tr><th>Total processed</th><td>' + data.total_processed + '</td></tr>';
+              }
+              html += '</tbody></table>';
+
+              if (data.errors && data.errors.length > 0) {
+                html += '<div class="notice notice-error"><p><strong>❌ Errors Encountered:</strong></p><ul>';
+                data.errors.forEach(function(error) {
+                  html += '<li>' + error + '</li>';
+                });
+                html += '</ul></div>';
+              }
+
+              $feedback.addClass('success').html(html);
+              $inlineFeedback.html('<span style="color:#22A300;">Batch import completed. Total processed: ' + totalProcessed + ' customers</span>');
+              $button.prop('disabled', false).text(originalText);
+            }
+          } else {
+            var errorMessage = response.data.message || DF_FINCON_ADMIN.messages.import_failed;
+            var errorDetails = JSON.stringify(response.data.data, null, 2) || 'No further details provided.';
+            $feedback.addClass('error').html('<p>❌ ' + errorMessage + '</p><pre>' + errorDetails + '</pre>');
+            $inlineFeedback.html('<span style="color:#B32D2E;">Batch customer import failed.</span>');
+            $button.prop('disabled', false).text(originalText);
+          }
+        })
+        .fail(function(xhr) {
+          $feedback.addClass('error').html('<p>❌ ' + DF_FINCON_ADMIN.messages.network_error + ' (HTTP Status: ' + xhr.status + ')</p>');
+          $inlineFeedback.html('<span style="color:#B32D2E;">Network error.</span>');
+          $button.prop('disabled', false).text(originalText);
+        });
+      }
+
+      processBatch(0);
+    });
+
+  })(); // End of Manual Customer Import Tab IIFE
+
 }); // End of jQuery(document).ready()
