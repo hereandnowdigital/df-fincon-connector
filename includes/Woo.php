@@ -54,6 +54,15 @@ class Woo {
    */
   private const LABEL_RETAIL_PRICE = 'Retail Price: ';
   private const LABEL_DEALER_PRICE = 'Your Price: ';
+  private const LABEL_VAT_INCL = 'Incl. VAT';
+  private const LABEL_VAT_EXCL = 'ex VAT';
+
+   /**
+   * Marker class added to dealer price HTML so the theme's price-suffix
+   * helper (dbg_append_price_vat_suffix) can detect that VAT labelling has
+   * already been applied and skip its own suffix.
+   */
+  private const DEALER_PRICE_WRAPPER_CLASS = 'df-fincon-dealer-price';
 
   private function __construct( ) {
     self::init();
@@ -74,7 +83,7 @@ class Woo {
 
   private static function register_actions_users(): void {
     add_action( 'init', [ __CLASS__, 'register_roles' ] );
-    add_action( 'woocommerce_edit_account_form', [ __CLASS__, 'display_frontend_session_pricing_button' ] );
+    // add_action( 'woocommerce_edit_account_form', [ __CLASS__, 'display_frontend_session_pricing_button' ] );
     add_filter( 'woocommerce_address_to_edit', [ __CLASS__, 'disable_myaccount_address_fields_for_dbg_dealer' ], 10, 2 );
     
     // My Account addresses page modifications for DBG Dealer sub accounts
@@ -101,7 +110,7 @@ class Woo {
     add_action( 'woocommerce_checkout_create_order', [ __CLASS__, 'save_price_list_to_order' ], 10, 2 );
     add_action( 'woocommerce_after_order_details', [ __CLASS__, 'add_pdf_download_to_order_view' ] );
     add_action( 'woocommerce_after_thankyou_title', [ __CLASS__, 'display_location_in_order_view' ] );
-add_action( 'woocommerce_after_order_details', [ __CLASS__, 'display_location_in_order_view' ] );
+    add_action( 'woocommerce_after_order_details', [ __CLASS__, 'display_location_in_order_view' ] );
     
     // Disable address fields for DBG Dealer sub accounts
     add_filter( 'woocommerce_checkout_fields', [ __CLASS__, 'disable_address_fields_for_dbg_dealer' ] );
@@ -131,6 +140,10 @@ add_action( 'woocommerce_after_order_details', [ __CLASS__, 'display_location_in
 
     // Cart item data hooks
     add_filter( 'woocommerce_add_cart_item_data', [ __CLASS__, 'add_price_list_to_cart_item_data' ], 10, 3 );
+    // Apply the dealer price to the product object the moment an item is added
+    // to cart. Without this, AJAX-built cart fragments (mini cart, side cart,
+    // cart count totals) would render the regular price until the next full
+    // page load triggers sync_cart_prices_with_price_list().
     add_filter( 'woocommerce_get_cart_item_from_session', [ __CLASS__, 'get_cart_item_from_session' ], 10, 3 );
     add_filter( 'woocommerce_cart_item_price', [ __CLASS__, 'filter_cart_item_price_display' ], 10, 3 );
     add_filter( 'woocommerce_cart_item_subtotal', [ __CLASS__, 'filter_cart_item_subtotal_display' ], 10, 3 );
@@ -139,6 +152,7 @@ add_action( 'woocommerce_after_order_details', [ __CLASS__, 'display_location_in
     add_filter( 'woocommerce_cart_loaded_from_session', [ __CLASS__, 'sync_cart_prices_with_price_list' ] );
     
     // Session management
+    add_action( 'woocommerce_add_cart_item', [ __CLASS__, 'apply_dealer_price_to_cart_item' ], 10, 2 );
     add_action( 'wp_login', [ __CLASS__, 'set_customer_price_list_on_login' ], 10, 2 );
     add_action( 'wp_logout', [ __CLASS__, 'clear_price_list_on_logout' ] );
     add_action( 'woocommerce_cart_emptied', [ __CLASS__, 'clear_price_list_on_cart_empty' ] );
@@ -161,7 +175,7 @@ add_action( 'woocommerce_after_order_details', [ __CLASS__, 'display_location_in
       add_role( self::USER_ROLE_DEALER, __( 'Client Type: Dealer (B2B)', 'df-fincon' ), $capabilities );
   }
   
-/**
+  /**
    * Output the custom Delivery Instructions field on checkout
    * * @param \WC_Checkout $checkout
    */
@@ -240,7 +254,7 @@ add_action( 'woocommerce_after_order_details', [ __CLASS__, 'display_location_in
           <?php esc_html_e( 'Download Invoice PDF', 'df-fincon' ); ?>
         </a>
         <span class="description" style="margin-left: 10px;">
-          <?php esc_html_e( 'Download your Fincon invoice as PDF', 'df-fincon' ); ?>
+          <?php esc_html_e( 'Download your invoice as PDF', 'df-fincon' ); ?>
         </span>
       </p>
       <?php else : ?>
@@ -724,7 +738,7 @@ add_action( 'woocommerce_after_order_details', [ __CLASS__, 'display_location_in
     
   }
 
-  /**
+   /**
    * Save price list to order meta
    *
    * @param \WC_Order $order WooCommerce order object
@@ -754,7 +768,6 @@ add_action( 'woocommerce_after_order_details', [ __CLASS__, 'display_location_in
     return self::filter_dealer_price_html( $price_html, $product );
     
   }
-
 
   /**
    * Add price list data to cart item when added to cart
@@ -786,6 +799,7 @@ add_action( 'woocommerce_after_order_details', [ __CLASS__, 'display_location_in
     return $cart_item_data;
   }
 
+
   /**
    * Restore cart item data from session
    *
@@ -805,6 +819,50 @@ add_action( 'woocommerce_after_order_details', [ __CLASS__, 'display_location_in
       $cart_item['df_fincon_price_list_price'] = $values['df_fincon_price_list_price'];
     }
     
+    return $cart_item;
+  }
+
+/**
+   * Apply the dealer price to a cart item the moment it is added.
+   *
+   * WC_Cart::add_to_cart() runs the woocommerce_add_cart_item filter while
+   * building the cart-item array, with $cart_item['data'] containing the
+   * product reference that will be stored in cart_contents. Setting the
+   * dealer price on that product here ensures every consumer in the same
+   * request (cart fragments, AJAX-built mini/side cart, totals
+   * calculations) sees the correct price - without waiting for a full page
+   * reload to trigger sync_cart_prices_with_price_list().
+   *
+   * @param array $cart_item Cart item being added (includes 'data' product)
+   * @return array Cart item with dealer price applied to its product
+   * @since 1.0.0
+   */
+  public static function apply_dealer_price_to_cart_item( array $cart_item ): array {
+    if ( ! self::is_dealer_customer() ) {
+      return $cart_item;
+    }
+
+    $price_list = self::get_current_price_list();
+    if ( $price_list === null || $price_list <= CustomerSync::PRICE_LIST_RETAIL ) {
+      return $cart_item;
+    }
+
+    if ( empty( $cart_item['data'] ) || ! is_object( $cart_item['data'] ) ) {
+      return $cart_item;
+    }
+
+    $product      = $cart_item['data'];
+    $dealer_price = self::calculate_dealer_price( $product );
+
+    if ( $dealer_price === null || $dealer_price <= 0 ) {
+      return $cart_item;
+    }
+
+    $product->set_price( $dealer_price );
+
+    $cart_item['df_fincon_price_list']       = $price_list;
+    $cart_item['df_fincon_price_list_price'] = $dealer_price;
+
     return $cart_item;
   }
 
@@ -998,19 +1056,35 @@ add_action( 'woocommerce_after_order_details', [ __CLASS__, 'display_location_in
    * @since 1.0.0
    */
 
-  private static function filter_dealer_price_html ( $price_html, $product ):string  {
+ private static function filter_dealer_price_html ( $price_html, $product ):string  {
     if ( is_admin( ) )
       return $price_html;
     if ( ! self::is_dealer_customer() ) 
       return $price_html;
   
     $regular_price = $product->get_price();
-    $dealer_price = self::calculate_dealer_price( $product );
-    
-    if ( $dealer_price < $regular_price ) 
-      return '<del>' . self::LABEL_RETAIL_PRICE . wc_price( $regular_price ) . '</del> ' . '<ins>' . self::LABEL_DEALER_PRICE  . wc_price( $dealer_price ) . '</ins>';
-    
-    return wc_price( $regular_price );
+    $dealer_price  = self::calculate_dealer_price( $product );
+
+    // Prices in WooCommerce/FinCon are stored ex-VAT. Dealers see their
+    // dealer price ex-VAT and the (struck-through) retail price incl-VAT.
+    $regular_price_incl_vat = is_numeric( $regular_price )
+      ? wc_get_price_including_tax( $product, [ 'price' => (float) $regular_price ] )
+      : $regular_price;
+
+    $vat_incl_suffix = ' <small class="df-fincon-vat-label df-fincon-vat-label--incl">' . esc_html( self::LABEL_VAT_INCL ) . '</small>';
+    $vat_excl_suffix = ' <small class="df-fincon-vat-label df-fincon-vat-label--excl">' . esc_html( self::LABEL_VAT_EXCL ) . '</small>';
+
+    if ( $dealer_price < $regular_price ) {
+      $retail_html = '<del>' . self::LABEL_RETAIL_PRICE . wc_price( $regular_price_incl_vat ) . $vat_incl_suffix . '</del>';
+      $dealer_html = '<ins>' . self::LABEL_DEALER_PRICE . wc_price( $dealer_price ) . $vat_excl_suffix . '</ins>';
+
+      return '<span class="' . esc_attr( self::DEALER_PRICE_WRAPPER_CLASS ) . '">' . $retail_html . ' ' . $dealer_html . '</span>';
+    }
+
+    // No dealer discount available: show the standard retail price incl-VAT
+    // with an Incl. VAT label, still wrapped so the theme's helper does not
+    // append a duplicate suffix.
+    return '<span class="' . esc_attr( self::DEALER_PRICE_WRAPPER_CLASS ) . '">' . wc_price( $regular_price_incl_vat ) . $vat_incl_suffix . '</span>';
   }
 
   /**
