@@ -123,10 +123,40 @@ class FinconApi {
   /*
   * Retrieves saved API configuration options.
   *
+  * Credentials (server_url, username, password, data_id) are always read
+  * from wp-config.php constants — never from the database.
+  * The active constant set is selected by the 'mode' option ('live'|'test').
+  *
+  * wp-config.php constants required (replace LIVE/TEST with your values):
+  *
+  *   // Live environment
+  *   define( 'DF_FINCON_LIVE_SERVER_URL', 'http://your-server' );
+  *   define( 'DF_FINCON_LIVE_USERNAME',   'your-username' );
+  *   define( 'DF_FINCON_LIVE_PASSWORD',   'your-password' );
+  *   define( 'DF_FINCON_LIVE_DATA_ID',    'YourDataID' );
+  *
+  *   // Test environment
+  *   define( 'DF_FINCON_TEST_SERVER_URL', 'http://your-test-server' );
+  *   define( 'DF_FINCON_TEST_USERNAME',   'your-test-username' );
+  *   define( 'DF_FINCON_TEST_PASSWORD',   'your-test-password' );
+  *   define( 'DF_FINCON_TEST_DATA_ID',    'TestDataID' );
+  *
   * @return array The array of plugin options
   */
   public static function get_configs( array $config_override = [] ): array {
     $options = wp_parse_args( self::get_options(), self::CONFIG_DEFAULTS );
+
+    // Determine active mode ('live' or 'test')
+    $mode   = strtoupper( $options['mode'] ?? 'live' );
+    $prefix = 'DF_FINCON_' . $mode . '_';
+
+    // Overlay credentials from wp-config constants (read-only — never from DB)
+    $options['server_url']  = defined( $prefix . 'SERVER_URL'  ) ? constant( $prefix . 'SERVER_URL'  ) : '';
+    $options['server_port'] = defined( $prefix . 'SERVER_PORT' ) ? constant( $prefix . 'SERVER_PORT' ) : '4090';
+    $options['username']    = defined( $prefix . 'USERNAME'    ) ? constant( $prefix . 'USERNAME'    ) : '';
+    $options['password']    = defined( $prefix . 'PASSWORD'    ) ? constant( $prefix . 'PASSWORD'    ) : '';
+    $options['data_id']     = defined( $prefix . 'DATA_ID'     ) ? constant( $prefix . 'DATA_ID'     ) : '';
+
     return wp_parse_args( $config_override, $options );
   }
 
@@ -142,6 +172,22 @@ class FinconApi {
   public static function get_option( string $option_key ): mixed {
     $options = get_option( self::OPTIONS_NAME, [] );
     return $options[$option_key] ?? null;
+  }
+
+  /**
+   * Returns true if all four credential constants for the active mode are defined.
+   * Used by the admin UI to show a status notice.
+   *
+   * @return bool
+   */
+  public static function constants_configured(): bool {
+    $mode   = strtoupper( self::get_option( 'mode' ) ?? 'live' );
+    $prefix = 'DF_FINCON_' . $mode . '_';
+    return defined( $prefix . 'SERVER_URL'  )
+        && defined( $prefix . 'SERVER_PORT' )
+        && defined( $prefix . 'USERNAME'    )
+        && defined( $prefix . 'PASSWORD'    )
+        && defined( $prefix . 'DATA_ID'     );
   }
 
   private static function build_base_url(): string {
@@ -383,49 +429,62 @@ class FinconApi {
 
   /**
    * Logs the API request and response details.
+   * Passwords are redacted from both the URL path and request body before logging.
    *
-   * @param string $function_name The Fincon API function being called.
-   * @param array $request_details Details of the request sent (path, method, body).
-   * @param array|\WP_Error $response_result The result of the client request.
+   * @param string $function_name  The Fincon API function being called.
+   * @param string $method         HTTP method.
+   * @param string $path           Full request URL.
+   * @param string $code           HTTP response code.
+   * @param array  $request_body   Request body array.
+   * @param mixed  $result         Parsed response or WP_Error.
    */
-  private static function log_api_call(  string $function_name, string $method, string $path, string $code, array $request_body, mixed $result ): void {
-    if ( !self::$log_enabled )
+  private static function log_api_call( string $function_name, string $method, string $path, string $code, array $request_body, mixed $result ): void {
+    if ( ! self::$log_enabled )
       return;
-
-    $log_message = "--- API CALL: {$function_name} ---\n";
-
-    // --- Sensitive Data Redaction for Login call ---
+ 
+    $logged_path = $path;
+    $logged_body = $request_body;
+ 
     if ( $function_name === 'Login' ) {
-        // Pattern matches: (/DataID/UserName/)(Password/)(UseAltExt/)
-        $logged_path = preg_replace( 
-            '/(\/DataID\/.*?\/?.*?\/?)(.+?)(\/.+?\/)$/', 
-            '$1[PASSWORD REDACTED]$3', 
-            $path, 
-            1 
-        );
+      // Path: credentials are not in the URL for POST-based login, but redact defensively.
+      $logged_path = preg_replace( '/(%2F|\/)[^%\/]+(%2F|\/)([^%\/]+)(%2F|\/)([^%\/]+)(%2F|\/)$/', '$1[REDACTED]$2[REDACTED]$4[REDACTED]$6', $path );
+ 
+      // Body: _parameters = [ DataID, Username, Password, UseAltExt ]
+      // Redact index 2 (password) if present.
+      if ( isset( $logged_body['_parameters'][2] ) )
+        $logged_body['_parameters'][2] = '[REDACTED]';
     }
-    
-    $log_message .= 'Resource Path: ' . $logged_path . "\n";
-    $log_message .= 'Method: ' . $method . "\n";
-
-    if ( ! empty( $request_body ) ) 
-      $log_message .= 'Request Body: ' . print_r( $request_body, true ) . "\n";
-    
-    $log_message .= 'Response Code: ' . ($code ?? 'N/A' ) . "\n";
-    
+ 
+    $log_message  = "--- API CALL: {$function_name} ---\n";
+    $log_message .= 'Resource Path: '  . $logged_path . "\n";
+    $log_message .= 'Method: '         . $method      . "\n";
+ 
+    if ( ! empty( $logged_body ) )
+      $log_message .= 'Request Body: ' . print_r( $logged_body, true ) . "\n";
+ 
+    $log_message .= 'Response Code: ' . ( $code ?? 'N/A' ) . "\n";
+ 
     if ( is_wp_error( $result ) )
       $log_message .= 'Error: ' . $result->get_error_message();
     else
       $log_message .= 'Response: ' . "\n" . print_r( $result ?? '[]', true );
-
-    // Check for HTTP error status or Fincon's internal ErrorInfo
-    if (  is_wp_error( $result ) || ( $code < 200 || $code >= 300 ) || ( isset( $response['result'][0]['ErrorInfo'] ) && ! empty( $response['result'][0]['ErrorInfo'] ) ) ) 
+ 
+    if ( is_wp_error( $result ) || ( $code < 200 || $code >= 300 ) || ( isset( $result['ErrorInfo'] ) && ! empty( $result['ErrorInfo'] ) ) )
       Logger::error( $log_message );
-    else 
+    else
       Logger::debug( $log_message );
-    
   }
 
+  /**
+   * Checks whether an API response indicates an expired or invalid ConnectID.
+   *
+   * Used after a request to decide whether to transparently re-authenticate
+   * and retry. Detects the "Invalid connect ID" message Fincon returns when
+   * a session has timed out or been invalidated server-side.
+   *
+   * @param mixed $result Parsed API response or WP_Error from the last request.
+   * @return bool True if the response signals an invalid/expired ConnectID, false otherwise.
+   */
   private static function is_invalid_connect_id_response( $result ): bool {
   
     // Handle Expired/Invalid ConnectID error

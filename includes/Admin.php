@@ -167,23 +167,69 @@ class Admin {
       
       add_settings_section(
         self::OPTIONS_NAME,
-        __( 'FinCon', 'df-fincon' ),
-        null,
+        __( 'FinCon API Connection', 'df-fincon' ),
+        [ __CLASS__, 'render_api_section_description' ],
         self::OPTIONS_NAME_API
       );
 
-      $fields = [
-          'log_enabled' => __( 'Enable API Logging', 'df-fincon' ),
-          'server_url' => __( 'Server URL', 'df-fincon' ),
-          'server_port' => __( 'Server Port', 'df-fincon' ),
-          'username' => __( 'FinCon Username', 'df-fincon' ),
-          'password' => __( 'FinCon Password', 'df-fincon' ),
-          'data_id' => __( 'Data ID', 'df-fincon' )
-      ];
+      // Mode switcher only — all connection settings live in wp-config.php
+      add_settings_field( 'mode',        __( 'Environment', 'df-fincon' ),        [ __CLASS__, 'render_api_mode_field' ], self::OPTIONS_NAME_API, self::OPTIONS_NAME );
+      add_settings_field( 'log_enabled', __( 'Enable API Logging', 'df-fincon' ), [ __CLASS__, 'render_field' ],          self::OPTIONS_NAME_API, self::OPTIONS_NAME, [ 'id' => 'log_enabled' ] );
+  }
 
-      foreach ( $fields as $id => $label )
-        add_settings_field( $id, $label, [ __CLASS__,'render_field' ], self::OPTIONS_NAME_API, self::OPTIONS_NAME, [ 'id' => $id ] );
-      
+  /**
+   * Renders the instructional notice shown at the top of the API settings section.
+   */
+  public static function render_api_section_description(): void {
+    $mode          = strtoupper( FinconApi::get_option( 'mode' ) ?? 'live' );
+    $prefix        = 'DF_FINCON_' . $mode . '_';
+    $all_defined   = FinconApi::constants_configured();
+    $notice_class  = $all_defined ? 'notice-success' : 'notice-warning';
+    $status_label  = $all_defined
+      ? __( 'All credentials are defined for the active environment.', 'df-fincon' )
+      : sprintf(
+          /* translators: %s: constant prefix e.g. DF_FINCON_LIVE_ */
+          __( 'One or more %s* constants are missing from wp-config.php.', 'df-fincon' ),
+          '<code>' . esc_html( $prefix ) . '</code>'
+        );
+    ?>
+    <div class="notice <?php echo esc_attr( $notice_class ); ?> inline">
+      <p><?php echo wp_kses( $status_label, [ 'code' => [] ] ); ?></p>
+    </div>
+
+    <p><?php esc_html_e( 'API credentials are stored in wp-config.php rather than the database. Add the following constants to your wp-config.php file — replace the placeholder values with your actual Fincon credentials.', 'df-fincon' ); ?></p>
+
+    <pre style="background:#f6f7f7;padding:12px 16px;border:1px solid #ddd;border-radius:3px;overflow-x:auto;font-size:12px;line-height:1.6;"><code>// Fincon Connector — Live credentials
+define( 'DF_FINCON_LIVE_SERVER_URL',  'http://your-live-server' );
+define( 'DF_FINCON_LIVE_SERVER_PORT', '4090' );
+define( 'DF_FINCON_LIVE_USERNAME',    'your-live-username' );
+define( 'DF_FINCON_LIVE_PASSWORD',    'your-live-password' );
+define( 'DF_FINCON_LIVE_DATA_ID',     'YourLiveDataID' );
+
+// Fincon Connector — Test credentials
+define( 'DF_FINCON_TEST_SERVER_URL',  'http://your-test-server' );
+define( 'DF_FINCON_TEST_SERVER_PORT', '4090' );
+define( 'DF_FINCON_TEST_USERNAME',    'your-test-username' );
+define( 'DF_FINCON_TEST_PASSWORD',    'your-test-password' );
+define( 'DF_FINCON_TEST_DATA_ID',     'YourTestDataID' );</code></pre>
+
+    <p style="color:#646970;"><?php esc_html_e( 'Place these constants above the "That\'s all, stop editing!" line in wp-config.php. The plugin reads the Live or Test set based on the Environment selection below.', 'df-fincon' ); ?></p>
+    <?php
+  }
+
+  /**
+   * Renders the Live / Test environment select field.
+   */
+  public static function render_api_mode_field(): void {
+    $options = FinconApi::get_options();
+    $value   = $options['mode'] ?? 'live';
+    ?>
+    <select id="mode" name="<?php echo esc_attr( self::OPTIONS_NAME_API ); ?>[mode]">
+      <option value="live" <?php selected( $value, 'live' ); ?>><?php esc_html_e( 'Live', 'df-fincon' ); ?></option>
+      <option value="test" <?php selected( $value, 'test' ); ?>><?php esc_html_e( 'Test', 'df-fincon' ); ?></option>
+    </select>
+    <p class="description"><?php esc_html_e( 'Selects which set of wp-config.php constants the plugin uses (DF_FINCON_LIVE_* or DF_FINCON_TEST_*).', 'df-fincon' ); ?></p>
+    <?php
   }
 
 
@@ -528,7 +574,8 @@ class Admin {
   }
 
   /**
-   * Sanitize API settings
+   * Sanitize API settings.
+   * Only mode, server_port and log_enabled are stored — credentials live in wp-config.php.
    *
    * @param array $input Raw input data
    * @return array Sanitized data
@@ -537,15 +584,16 @@ class Admin {
     if ( ! is_array( $input ) )
       $input = [];
 
-    $existing = FinconApi::get_options();
+    $existing  = FinconApi::get_options();
     $sanitized = $existing;
-    
-    $sanitized['server_url'] = isset( $input['server_url'] ) ? sanitize_text_field( $input['server_url'] ) : '';
-    $sanitized['server_port'] = isset( $input['server_port'] ) ? sanitize_text_field( $input['server_port'] ) : '';
-    $sanitized['username'] = isset( $input['username'] ) ? sanitize_text_field( $input['username'] ) : '';
-    $sanitized['password'] = isset( $input['password'] ) ? sanitize_text_field( $input['password'] ) : '';
-    $sanitized['data_id'] = isset( $input['data_id'] ) ? sanitize_text_field( $input['data_id'] ) : '';
+
+    $allowed_modes            = [ 'live', 'test' ];
+    $sanitized['mode']        = isset( $input['mode'] ) && in_array( $input['mode'], $allowed_modes, true ) ? $input['mode'] : 'live';
     $sanitized['log_enabled'] = ! empty( $input['log_enabled'] );
+
+    // Explicitly unset any connection settings that may have been saved previously
+    foreach ( [ 'server_url', 'server_port', 'username', 'password', 'data_id' ] as $key )
+      unset( $sanitized[ $key ] );
 
     return $sanitized;
   }
