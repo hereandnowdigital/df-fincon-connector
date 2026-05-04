@@ -1372,7 +1372,7 @@ class Admin {
             name="<?php echo esc_attr( self::OPTIONS_NAME_ORDERS ); ?>[order_creation_mode]">
  
       <option value="sales_order" <?php selected( $value, 'sales_order' ); ?>>
-        <?php esc_html_e( 'Sales Order (current behaviour – reserves stock immediately)', 'df-fincon' ); ?>
+        <?php esc_html_e( 'Sales Order (Reserves stock immediately)', 'df-fincon' ); ?>
       </option>
  
       <option value="quotation" <?php selected( $value, 'quotation' ); ?>>

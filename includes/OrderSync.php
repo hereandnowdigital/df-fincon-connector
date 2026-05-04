@@ -1977,26 +1977,6 @@ class OrderSync {
     return $response;
   }
  
-<?php
-/**
- * OrderSync – prepare_quote_data() replacement
- *
- * This is a complete drop-in replacement for the prepare_quote_data()
- * method introduced in OrderSync.additions.php.
- *
- * Changes from the additions file version:
- *  - 'TotalTax' added to the quote header array.
- *  - 'LineTotalTax' added to every line item.
- *
- * No dealer-pricing recalculation is needed here because the quote payload
- * builder does not adjust line totals — it uses WooCommerce's figures
- * directly, so $item->get_total_tax() is always the correct value.
- *
- * @author  Elizabeth Meyer <elizabeth@hereandnowdigital.co.za>
- * @package df-fincon-connector
- * @since   1.2.0
- */
-
   /**
    * Build the QuotationRecord payload from a WooCommerce order.
    *

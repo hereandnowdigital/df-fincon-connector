@@ -980,7 +980,9 @@ class InvoiceChecker {
     }
  
     $fincon_api = new FinconApi();
-    $response   = $fincon_api->get_sales_orders_by_acc_no( $acc_no );
+    $order_date = $order->get_date_created();
+    $min_date   = $order_date ? $order_date->format( 'Ymd' ) : date( 'Ymd' );
+    $response = $fincon_api->get_sales_orders_by_date( $min_date );
  
     if ( is_wp_error( $response ) ) {
       Logger::warning( 'Sales order lookup API call failed.', [
@@ -996,12 +998,12 @@ class InvoiceChecker {
     $matched         = null;
  
     foreach ( $response['SalesOrders'] ?? [] as $so ) {
-      $so_quote_no    = trim( $so['QuoteNo']      ?? '' );
-      $so_cust_ref    = trim( $so['CustomerRef']  ?? '' );
- 
+      $so_quote_no  = trim( $so['QuoteNo']     ?? '' );
+      $so_cust_ref  = trim( $so['CustomerRef'] ?? '' );
+
       if ( $so_quote_no === $quote_no || $so_cust_ref === $wc_customer_ref ) {
-        $matched = $so;
-        break;
+          $matched = $so;
+          break;
       }
     }
  

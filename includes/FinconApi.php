@@ -842,6 +842,58 @@ class FinconApi {
   }
 
   /**
+   * Retrieve sales orders by date, filtered client-side by account number.
+   *
+   * Used to resolve a stored QuoteNo to the sales order the Fincon team
+   * created from it. Queries GetSalesOrdersByDate from $min_date forward
+   * (no upper bound) then filters results to the given AccNo client-side,
+   * since the API has no combined date+account filter.
+   *
+   * OutstandingOnly and ListTransactions are both false so invoiced orders
+   * remain visible and detail lines are excluded (not needed for matching).
+   *
+   * @param string $acc_no   Debtor account number to filter results by.
+   * @param string $min_date Minimum order date in CCYYMMDD format. Defaults
+   *                         to today if empty. Should be set to the WooCommerce
+   *                         order creation date to keep the result set small.
+   * @param string $loc_no   Stock location filter. Empty string = all locations.
+   * @param int    $count    Maximum records to return from the API. Default 200.
+   * @return array|\WP_Error API response with SalesOrders filtered to $acc_no,
+   *                         or WP_Error on failure.
+   * @since 1.2.0
+   */
+  public function get_sales_orders_by_date(
+    string $min_date,
+    string $loc_no = '',
+    int    $count  = 200
+): array|\WP_Error {
+    $function     = 'GetSalesOrdersByDate';
+    $query_params = [
+        $min_date,  // MinDate
+        '',         // MaxDate – blank = no upper limit
+        $loc_no,
+        'false',    // OutstandingOnly
+        'false',    // ListTransactions
+        '0',        // RecNo
+        (string) $count,
+    ];
+
+    $result = $this->get_request( $function, $query_params );
+
+    if ( is_wp_error( $result ) )
+        return $result;
+
+    if ( ! isset( $result['SalesOrders'] ) )
+        return new \WP_Error(
+            'fincon_sales_orders_parse_error',
+            __( 'Fincon API returned sales orders in an unexpected format.', 'df-fincon' ),
+            [ 'raw_response' => $result ]
+        );
+
+    return $result;
+}
+
+  /**
    * Get PDF document from Fincon
    * API function: "GetDocumentPdf"
    * Method: GET

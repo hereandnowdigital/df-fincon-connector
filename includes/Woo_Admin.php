@@ -123,12 +123,15 @@ class Woo_Admin {
     add_filter( 'posts_join', [ __CLASS__, 'filter_orders_by_fincon_order_join' ], 10, 2 );
     add_filter( 'posts_where', [ __CLASS__, 'filter_orders_by_fincon_order_where' ], 10, 2 );
 
+    add_filter( 'woocommerce_order_table_search_query_meta_keys', [ __CLASS__, 'add_quote_no_to_order_search' ] );
+    add_filter( 'woocommerce_order_search_fields', [ __CLASS__, 'add_quote_no_to_order_search_fields' ] );
+
     // Lifecycle state filter – traditional CPT
-    add_action( 'restrict_manage_posts', [ __CLASS__, 'add_fincon_lifecycle_state_filter' ], 25 );
-    add_filter( 'request',               [ __CLASS__, 'filter_orders_by_lifecycle_state' ] );
+    // add_action( 'restrict_manage_posts', [ __CLASS__, 'add_fincon_lifecycle_state_filter' ], 25 );
+    // add_filter( 'request',               [ __CLASS__, 'filter_orders_by_lifecycle_state' ] );
 
     // Lifecycle state filter – HPOS
-    add_action( 'woocommerce_order_list_table_restrict_manage_orders', [ __CLASS__, 'add_fincon_lifecycle_state_filter' ], 25 );
+    // add_action( 'woocommerce_order_list_table_restrict_manage_orders', [ __CLASS__, 'add_fincon_lifecycle_state_filter' ], 25 );
 
   }
 
@@ -825,6 +828,7 @@ echo '<h3>' . __( 'FinCon Data', 'df-fincon' ) . '</h3>';
         if ( ! isset( $new_columns['price_list'] ) ) {
           $new_columns['price_list'] = __( 'Price List', 'df-fincon' );
         }
+        $new_columns['fincon_quote_no']    = __( 'Fincon Quote #', 'df-fincon' );
         $new_columns['fincon_sales_order'] = __( 'Fincon Order #', 'df-fincon' );
         $new_columns['fincon_invoice'] = __( 'Fincon Invoice', 'df-fincon' );
       }
@@ -891,13 +895,24 @@ echo '<h3>' . __( 'FinCon Data', 'df-fincon' ) . '</h3>';
    * @since 1.1.0
    */
   public static function display_order_fincon_columns( string $column, int $order_id ): void {
-    if ( ! in_array( $column, [ 'fincon_sales_order', 'fincon_invoice' ], true ) )
+    if ( ! in_array( $column, [ 'fincon_quote_no' , 'fincon_sales_order', 'fincon_invoice' ], true ) )
       return;
     
     $order = wc_get_order( $order_id );
     if ( ! $order )
       return;
-    
+
+    if ( $column === 'fincon_quote_no' ) {
+    $quote_no = $order->get_meta( OrderSync::META_QUOTE_NO );
+
+    if ( ! empty( $quote_no ) ) {
+        echo '<span style="font-weight:bold;color:#2271b1;">'
+            . esc_html( $quote_no )
+            . '</span>';
+    } else {
+        echo '<span class="na">—</span>';
+    }
+}
     if ( $column === 'fincon_sales_order' ) {
       // Display Fincon Order # number
       $fincon_order_no = $order->get_meta( OrderSync::META_ORDER_NO );
@@ -1039,9 +1054,21 @@ echo '<h3>' . __( 'FinCon Data', 'df-fincon' ) . '</h3>';
    * @since 1.1.0
    */
   public static function display_order_fincon_columns_hpos( string $column, \WC_Order $order ): void {
-    if ( ! in_array( $column, [ 'fincon_sales_order', 'fincon_invoice' ], true ) )
+    if ( ! in_array( $column, [ 'fincon_quote_no', 'fincon_sales_order', 'fincon_invoice' ], true ) )
       return;
     
+    if ( $column === 'fincon_quote_no' ) {
+        $quote_no = $order->get_meta( OrderSync::META_QUOTE_NO );
+
+        if ( ! empty( $quote_no ) ) {
+            echo '<span style="font-weight:bold;color:#2271b1;">'
+                . esc_html( $quote_no )
+                . '</span>';
+        } else {
+            echo '<span class="na">—</span>';
+        }
+    }
+
     if ( $column === 'fincon_sales_order' ) {
       // Display Fincon Order # number
       $fincon_order_no = $order->get_meta( OrderSync::META_ORDER_NO );
@@ -1292,8 +1319,12 @@ echo '<h3>' . __( 'FinCon Data', 'df-fincon' ) . '</h3>';
       return;
     
     echo '<style>
+
       .column-price_list {
         width: 100px;
+      }
+    .column-fincon_quote_no {
+          width: 110px;
       }
       .column-fincon_sales_order {
         width: 120px;
@@ -1507,7 +1538,7 @@ echo '<h3>' . __( 'FinCon Data', 'df-fincon' ) . '</h3>';
       return $hidden;
     
     // Hide Fincon columns by default
-    $fincon_columns = [ 'fincon_sales_order', 'fincon_invoice' ];
+    $fincon_columns = [ 'fincon_quote_no', 'fincon_sales_order', 'fincon_invoice' ];
     
     // Add Fincon columns to hidden list if not already there
     foreach ( $fincon_columns as $column ) {
@@ -1783,6 +1814,30 @@ echo '<h3>' . __( 'FinCon Data', 'df-fincon' ) . '</h3>';
     ];
  
     return $query_vars;
+  }
+
+  /**
+   * Include Fincon Quote No in the HPOS order search meta keys.
+   *
+   * @param array $meta_keys Existing searchable meta keys.
+   * @return array
+   * @since 1.2.0
+   */
+  public static function add_quote_no_to_order_search( array $meta_keys ): array {
+      $meta_keys[] = OrderSync::META_QUOTE_NO;
+      return $meta_keys;
+  }
+
+  /**
+   * Add Fincon Quote No to the order search field dropdown options.
+   *
+   * @param array $search_fields Existing search field options.
+   * @return array
+   * @since 1.2.0
+   */
+  public static function add_quote_no_to_order_search_fields( array $search_fields ): array {
+      $search_fields[ OrderSync::META_QUOTE_NO ] = __( 'Fincon Quote No.', 'df-fincon' );
+      return $search_fields;
   }
 
 }
